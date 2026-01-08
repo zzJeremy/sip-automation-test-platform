@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIP自动化测试平台</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+        .control-group {
+            flex: 1;
+            min-width: 200px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        select, input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #e9ecef;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #28a745;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .results {
+            margin-top: 30px;
+        }
+        .result-item {
+            padding: 10px;
+            margin: 10px 0;
+            border-left: 4px solid #007bff;
+            background-color: #f8f9fa;
+        }
+        .test-running {
+            background-color: #fff3cd;
+            border-left-color: #ffc107;
+        }
+        .test-completed {
+            background-color: #d4edda;
+            border-left-color: #28a745;
+        }
+        .test-error {
+            background-color: #f8d7da;
+            border-left-color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SIP自动化测试平台</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label>测试用例选择:</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="basicTest" value="basic" checked onchange="toggleBasicSubmenu()"> 基础功能测试
+                    </label>
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="performanceTest" value="performance"> 性能测试
+                    </label>
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="exceptionTest" value="exception"> 异常测试
+                    </label>
+                    <label style="display: flex; align-items: center;">
+                        <input type="checkbox" id="sipMessageTest" value="sip_message"> SIP消息测试
+                    </label>
+                </div>
+                
+                <!-- 基础功能测试子菜单 -->
+                <div id="basicSubmenu" style="margin-left: 20px; padding: 10px; border-left: 2px solid #ccc; display: block;">
+                    <p><strong>基础功能测试用例子菜单:</strong></p>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px;">
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="unconditional_forward"> 无条件前转
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="no_answer_forward"> 无应答前转
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="busy_forward"> 遇忙前转
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="secretary_service"> 秘书业务
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="simple_call"> 简单通话
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="conference"> 会议功能
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="busy_callback"> 遇忙回叫
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="call_waiting"> 呼叫等待
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="multi_party_call"> 多方通话
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="abbreviated_dialing"> 缩位拨号
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="call_hold"> 呼叫保持
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="group_answer"> 同组代接
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="do_not_disturb"> 免打扰
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="designated_answer"> 指定代答
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="outbound_restriction"> 呼出限制
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="alarm_service"> 闹钟服务
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="call_forward"> 呼叫转移
+                        </label>
+                        <label style="display: flex; align-items: center;">
+                            <input type="checkbox" class="basicSubTest" value="hotline"> 立即热线
+                        </label>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label for="testDuration">测试持续时间 (秒):</label>
+                <input type="number" id="testDuration" value="30" min="1">
+            </div>
+            
+            <div class="control-group">
+                <label for="concurrentCalls">并发呼叫数:</label>
+                <input type="number" id="concurrentCalls" value="5" min="1" max="100">
+            </div>
+            
+            <div class="control-group">
+                <label>&nbsp;</label>
+                <button id="startTestBtn" onclick="startTest()">一键功能测试</button>
+            </div>
+        </div>
+        
+        <div id="statusSection" class="status" style="display: none;">
+            <h3>测试状态</h3>
+            <p><strong>当前测试:</strong> <span id="currentTest">无</span></p>
+            <p><strong>运行状态:</strong> <span id="runningStatus">停止</span></p>
+            <div class="progress-bar">
+                <div id="progressFill" class="progress-fill"></div>
+            </div>
+            <p><strong>进度:</strong> <span id="progressText">0%</span></p>
+        </div>
+        
+        <div class="results">
+            <h3>测试结果</h3>
+            <div id="resultsContainer">
+                <p>暂无测试结果</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 页面加载完成后开始轮询测试状态
+        document.addEventListener('DOMContentLoaded', function() {
+            loadResults();
+            setInterval(updateStatus, 2000);
+        });
+        
+        // 切换基础功能测试子菜单的显示/隐藏
+        function toggleBasicSubmenu() {
+            const basicTestCheckbox = document.getElementById('basicTest');
+            const submenu = document.getElementById('basicSubmenu');
+            
+            if (basicTestCheckbox.checked) {
+                submenu.style.display = 'block';
+            } else {
+                submenu.style.display = 'none';
+            }
+        }
+        
+        function startTest() {
+            // 获取所有勾选的测试用例
+            const selectedTests = [];
+            
+            // 检查主测试类型
+            if (document.getElementById('basicTest').checked) {
+                // 检查基础功能测试的子测试用例
+                const basicSubTests = document.querySelectorAll('.basicSubTest');
+                let hasBasicSubTests = false;
+                for (let subTest of basicSubTests) {
+                    if (subTest.checked) {
+                        selectedTests.push('basic_' + subTest.value);
+                        hasBasicSubTests = true;
+                    }
+                }
+                
+                // 如果没有选择子测试用例，添加基础测试
+                if (!hasBasicSubTests) {
+                    selectedTests.push('basic');
+                }
+            } else {
+                // 如果没有勾选基础测试，但选择了基础子测试，也添加它们
+                const basicSubTests = document.querySelectorAll('.basicSubTest:checked');
+                if (basicSubTests.length > 0) {
+                    for (let subTest of basicSubTests) {
+                        selectedTests.push('basic_' + subTest.value);
+                    }
+                }
+            }
+            
+            if (document.getElementById('performanceTest').checked) selectedTests.push('performance');
+            if (document.getElementById('exceptionTest').checked) selectedTests.push('exception');
+            if (document.getElementById('sipMessageTest').checked) selectedTests.push('sip_message');
+            
+            // 如果没有勾选任何测试用例，默认执行所有测试
+            if (selectedTests.length === 0) {
+                selectedTests.push('basic', 'performance', 'exception', 'sip_message');
+            }
+            
+            const testDuration = parseInt(document.getElementById('testDuration').value);
+            const concurrentCalls = parseInt(document.getElementById('concurrentCalls').value);
+            
+            const startBtn = document.getElementById('startTestBtn');
+            startBtn.disabled = true;
+            startBtn.textContent = '测试运行中...';
+            
+            // 如果只选择了一个测试，直接执行该测试；否则执行"all"测试类型
+            let testType = selectedTests.length === 1 ? selectedTests[0] : 'all';
+            
+            fetch('/api/start_test', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    test_type: testType,
+                    test_duration: testDuration,
+                    concurrent_calls: concurrentCalls,
+                    selected_tests: selectedTests  // 发送选中的测试用例列表
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    document.getElementById('statusSection').style.display = 'block';
+                    updateStatus();
+                } else {
+                    alert('启动测试失败: ' + data.message);
+                    startBtn.disabled = false;
+                    startBtn.textContent = '一键功能测试';
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('启动测试时发生错误');
+                startBtn.disabled = false;
+                startBtn.textContent = '一键功能测试';
+            });
+        }
+        
+        function updateStatus() {
+            fetch('/api/test_status')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('currentTest').textContent = data.current_test || '无';
+                document.getElementById('runningStatus').textContent = data.is_running ? '运行中' : '已停止';
+                
+                const progress = data.test_progress || 0;
+                document.getElementById('progressFill').style.width = progress + '%';
+                document.getElementById('progressText').textContent = progress + '%';
+                
+                if (!data.is_running) {
+                    document.getElementById('startTestBtn').disabled = false;
+                    document.getElementById('startTestBtn').textContent = '开始测试';
+                }
+            })
+            .catch(error => {
+                console.error('获取状态失败:', error);
+            });
+        }
+        
+        function loadResults() {
+            fetch('/api/test_results')
+            .then(response => response.json())
+            .then(data => {
+                const container = document.getElementById('resultsContainer');
+                
+                if (data.results.length === 0) {
+                    container.innerHTML = '<p>暂无测试结果</p>';
+                    return;
+                }
+                
+                // 按时间倒序排列
+                const sortedResults = data.results.sort((a, b) => 
+                    new Date(b.timestamp) - new Date(a.timestamp)
+                );
+                
+                let html = '';
+                sortedResults.forEach(result => {
+                    const statusClass = result.status === 'error' ? 'test-error' : 
+                                      result.status === 'completed' ? 'test-completed' : 'test-running';
+                    const statusText = result.status === 'error' ? '错误' : 
+                                     result.status === 'completed' ? '完成' : '运行中';
+                    
+                    html += `
+                        <div class="result-item ${statusClass}">
+                            <p><strong>测试类型:</strong> ${result.test_type}</p>
+                            <p><strong>状态:</strong> ${statusText}</p>
+                            <p><strong>时间:</strong> ${new Date(result.timestamp).toLocaleString()}</p>
+                            ${result.details ? `<p><strong>详情:</strong> ${result.details}</p>` : ''}
+                            ${result.results ? `<p><strong>性能结果:</strong> 成功呼叫: ${result.results.successful_calls}/${result.results.total_calls_attempted}</p>` : ''}
+                            ${result.error ? `<p><strong>错误:</strong> ${result.error}</p>` : ''}
+                        </div>
+                    `;
+                });
+                
+                container.innerHTML = html;
+            })
+            .catch(error => {
+                console.error('加载结果失败:', error);
+            });
+        }
+        
+        // 每5秒自动刷新结果
+        setInterval(loadResults, 5000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,90 @@
+classDiagram
+    class TestCase {
+        +String id
+        +String name
+        +String description
+        +String protocol_type
+        +JSON test_steps
+        +JSON expected_results
+        +DateTime created_at
+        +DateTime updated_at
+        +create()
+        +update()
+        +delete()
+        +execute()
+    }
+
+    class TestSuite {
+        +String id
+        +String name
+        +List~TestCase~ cases
+        +JSON config
+        +addTestCase()
+        +removeTestCase()
+        +execute()
+    }
+
+    class TestExecutionEngine {
+        -List~TestRunner~ runners
+        +executeTest(TestCase)
+        +executeTestSuite(TestSuite)
+        +stopExecution()
+        +pauseExecution()
+        +resumeExecution()
+    }
+
+    class TestRunner {
+        -ProtocolHandler protocolHandler
+        -ResultCollector resultCollector
+        +runTest(TestCase)
+        +collectResults()
+        +validateResults()
+    }
+
+    class ProtocolHandler {
+        +String protocolType
+        +initializeConnection()
+        +sendMessage(Message)
+        +receiveMessage()
+        +closeConnection()
+    }
+
+    class SIPHandler {
+        +handleInvite()
+        +handleBye()
+        +handleAck()
+    }
+
+    class ISUPHandler {
+        +handleIAM()
+        +handleREL()
+        +handleRLC()
+    }
+
+    class TestResult {
+        +String id
+        +String test_case_id
+        +String status
+        +JSON actual_results
+        +DateTime executed_at
+        +String execution_time
+        +save()
+        +generateReport()
+    }
+
+    class ConfigurationManager {
+        +JSON system_config
+        +JSON test_environment
+        +loadConfig()
+        +saveConfig()
+        +updateConfig()
+    }
+
+    TestCase "*" --o "1" TestSuite
+    TestSuite "1" --o "1" TestExecutionEngine
+    TestExecutionEngine "1" -- "*" TestRunner
+    TestRunner "1" -- "1" ProtocolHandler
+    ProtocolHandler <|-- SIPHandler
+    ProtocolHandler <|-- ISUPHandler
+    TestRunner "1" -- "*" TestResult
+    TestExecutionEngine "1" -- "1" ConfigurationManager

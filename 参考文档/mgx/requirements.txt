@@ -1,0 +1,7 @@
+# requirements.txt
+PyQt5==5.15.9
+mysql-connector-python==8.0.33
+pytest==7.4.0
+sip==6.7.9
+pyserial==3.5
+flake8==6.1.0

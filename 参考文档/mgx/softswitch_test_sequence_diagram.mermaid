@@ -1,0 +1,40 @@
+sequenceDiagram
+    participant UI as Web Interface
+    participant API as API Gateway
+    participant TE as TestExecutionEngine
+    participant TR as TestRunner
+    participant PH as ProtocolHandler
+    participant DB as Database
+
+    %% Test Case Execution Flow
+    UI->>API: POST /api/tests/execute
+    API->>TE: executeTest(testCase)
+    TE->>TR: createTestRunner()
+    TR->>PH: initializeConnection()
+    PH-->>TR: connection established
+
+    loop Test Steps
+        TR->>PH: sendMessage(testStep)
+        PH-->>TR: messageResponse
+        TR->>TR: validateResponse()
+        TR->>DB: saveStepResult()
+    end
+
+    TR->>PH: closeConnection()
+    TR->>TE: testCompleted(results)
+    TE->>API: returnResults()
+    API->>UI: HTTP 200 (results)
+
+    %% Test Result Processing
+    UI->>API: GET /api/tests/results/{id}
+    API->>DB: fetchTestResults(id)
+    DB-->>API: testResults
+    API->>UI: HTTP 200 (results)
+
+    %% Report Generation
+    UI->>API: POST /api/reports/generate
+    API->>TE: generateReport(testResults)
+    TE->>DB: fetchDetailedResults()
+    DB-->>TE: detailedResults
+    TE->>API: reportData
+    API->>UI: HTTP 200 (report)
