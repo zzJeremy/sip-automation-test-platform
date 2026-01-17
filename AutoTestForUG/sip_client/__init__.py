@@ -6,10 +6,11 @@ from .sip_client_base import SIPClientBase
 from .pj_sip_client import PJSIPSIPClient
 from .socket_client_adapter import SocketSIPClientAdapter
 from .hybrid_client import HybridSIPTestClient
-from .client_manager import SIPClientManager
+from .client_manager import SIPClientManager, SIPClientType
 from .sipp_driver_client import SIPpDriverClient
 from .socket_fuzz_client import SocketFuzzClient
-from .test_orchestrator import TestOrchestrator, TestCase, TestType
+from .asterisk_sip_client import AsteriskSIPClient
+from .client_selection_strategy import ClientSelectionStrategy, HybridClient, TestRequirement
 
 __all__ = [
     'SIPClientBase',
@@ -17,9 +18,11 @@ __all__ = [
     'SocketSIPClientAdapter',
     'HybridSIPTestClient',
     'SIPClientManager',
+    'SIPClientType',
     'SIPpDriverClient',
     'SocketFuzzClient',
-    'TestOrchestrator',
-    'TestCase',
-    'TestType'
+    'AsteriskSIPClient',
+    'ClientSelectionStrategy',
+    'HybridClient',
+    'TestRequirement'
 ]

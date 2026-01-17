@@ -12,16 +12,20 @@ from .pj_sip_client import PJSIPSIPClient
 from .socket_client_adapter import SocketSIPClientAdapter  # 我们的socket适配器实现
 from .sipp_driver_client import SIPpDriverClient
 from .socket_fuzz_client import SocketFuzzClient
+from .asterisk_sip_client import AsteriskSIPClient
 
 
 class SIPClientType(Enum):
     """
     SIP客户端类型枚举
     """
-    SOCKET = "socket"        # 基于socket的实现
-    PJSIP = "pj_sip"         # 基于PJSIP的实现
-    SIPp_DRIVER = "sipp_driver"  # 基于SIPp的实现
-    SOCKET_FUZZ = "socket_fuzz"  # 基于socket的模糊测试实现
+    SOCKET = "socket"           # 基础socket实现
+    PJSIP = "pj_sip"           # PJSIP实现
+    SIPp_DRIVER = "sipp_driver" # SIPp实现
+    SOCKET_FUZZ = "socket_fuzz" # 模糊测试
+    ASTERISK_AMI = "asterisk_ami"  # Asterisk AMI接口
+    ASTERISK_AGI = "asterisk_agi"  # Asterisk AGI接口
+    ASTERISK_ARI = "asterisk_ari"  # Asterisk ARI接口
 
 
 class SIPClientManager:
@@ -67,6 +71,9 @@ class SIPClientManager:
         elif client_type == SIPClientType.SOCKET_FUZZ:
             # 返回Socket模糊测试客户端实现
             return SocketFuzzClient(self.config)
+        elif client_type in [SIPClientType.ASTERISK_AMI, SIPClientType.ASTERISK_AGI, SIPClientType.ASTERISK_ARI]:
+            # 返回Asterisk客户端实现
+            return AsteriskSIPClient(self.config)
         else:
             raise ValueError(f"不支持的客户端类型: {client_type}")
     

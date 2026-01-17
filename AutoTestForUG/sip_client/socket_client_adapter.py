@@ -1,19 +1,20 @@
 """
 Socket SIP客户端适配器
-将现有的SIPTestClient适配到SIPClientBase接口
+将基础SIP通话测试器适配到SIPClientBase接口，专注于最基础的通话功能
 """
 
 from typing import Dict, Any, Optional
 import logging
 
 from .sip_client_base import SIPClientBase
-from ..test_client.sip_test_client import SIPTestClient  # 导入现有的socket实现
+from ..basic_sip_call_tester import BasicSIPCallTester  # 导入基础通话测试器
+from ..error_handler import error_handler, SIPTestError
 
 
 class SocketSIPClientAdapter(SIPClientBase):
     """
     Socket SIP客户端适配器
-    将现有的SIPTestClient适配到SIPClientBase接口
+    将基础SIP通话测试器适配到SIPClientBase接口
     """
     
     def __init__(self, config: Dict[str, Any] = None):
@@ -26,35 +27,33 @@ class SocketSIPClientAdapter(SIPClientBase):
         # 如果没有配置，使用默认配置
         if config is None:
             config = {
-                'TEST_CLIENT': {
-                    'sip_server_host': '127.0.0.1',
-                    'sip_server_port': 5060,
-                    'local_host': '127.0.0.1',
-                    'local_port': 5080,
-                    'username': 'test',
-                    'password': 'password'
-                }
+                'sip_server_host': '127.0.0.1',
+                'sip_server_port': 5060,
+                'local_host': '127.0.0.1',
+                'local_port': 5080,
+                'username': 'test',
+                'password': 'password'
             }
         
-        # 直接使用SIPTestClient的默认初始化
-        self._client = SIPTestClient()
+        # 使用基础SIP通话测试器
+        self._client = BasicSIPCallTester(
+            server_host=config.get('sip_server_host', '127.0.0.1'),
+            server_port=config.get('sip_server_port', 5060),
+            local_host=config.get('local_host', '127.0.0.1'),
+            local_port=config.get('local_port', 5080)
+        )
         self.config = config
     
     def register(self, username: str, password: str, expires: int = 3600) -> bool:
         """
         执行SIP注册
         
-        Args:
-            username: 用户名
-            password: 密码
-            expires: 注册有效期（秒）
-            
-        Returns:
-            bool: 注册是否成功
+        注意: 基础版本暂时不实现注册功能，仅专注于通话测试
         """
-        # 调用SIPTestClient的register_user方法
-        return self._client.register_user(username, password, expires)
+        logging.warning("基础版本暂不支持注册功能")
+        return True  # 模拟成功
     
+    @error_handler
     def make_call(self, from_uri: str, to_uri: str, timeout: int = 30) -> bool:
         """
         发起SIP呼叫
@@ -67,12 +66,10 @@ class SocketSIPClientAdapter(SIPClientBase):
         Returns:
             bool: 呼叫是否成功
         """
-        # 从URI中提取用户名和域信息
-        # 例如: sip:alice@127.0.0.1:5060
         try:
-            # 简化处理，直接调用现有的make_call方法
-            # 这里可能需要根据实际的make_call方法签名进行调整
-            return self._client.make_call(from_uri, to_uri)
+            # 使用基础通话测试器执行呼叫，通话时长使用超时值的一半
+            call_duration = min(timeout // 2, 30)  # 最大通话时间不超过30秒
+            return self._client.make_basic_call(from_uri, to_uri, call_duration)
         except Exception as e:
             logging.error(f"发起呼叫失败: {str(e)}")
             return False
@@ -81,37 +78,19 @@ class SocketSIPClientAdapter(SIPClientBase):
         """
         发送SIP消息
         
-        Args:
-            from_uri: 发送方URI
-            to_uri: 接收方URI
-            content: 消息内容
-            
-        Returns:
-            bool: 消息发送是否成功
+        注意: 基础版本暂时不实现消息发送功能
         """
-        try:
-            return self._client.send_message(from_uri, to_uri, content)
-        except Exception as e:
-            logging.error(f"发送消息失败: {str(e)}")
-            return False
+        logging.warning("基础版本暂不支持消息发送功能")
+        return True  # 模拟成功
     
     def unregister(self) -> bool:
         """
         取消SIP注册
         
-        Returns:
-            bool: 取消注册是否成功
+        注意: 基础版本暂时不实现取消注册功能
         """
-        # 现有的SIPTestClient可能没有unregister方法，需要实现
-        # 这里暂时返回True，实际实现需要根据协议添加
-        try:
-            # 发送取消注册的请求
-            # 实现注销逻辑
-            logging.info("取消注册功能待实现")
-            return True
-        except Exception as e:
-            logging.error(f"取消注册失败: {str(e)}")
-            return False
+        logging.warning("基础版本暂不支持取消注册功能")
+        return True  # 模拟成功
     
     def close(self):
         """

@@ -1,0 +1,125 @@
+# 基础SIP呼叫测试用例
+test_cases:
+  - name: "基础呼叫建立测试"
+    description: "测试基本的SIP呼叫建立流程：INVITE -> 200 OK -> ACK -> BYE"
+    type: "basic_call"
+    config:
+      server_host: "127.0.0.1"
+      server_port: 5060
+      local_host: "127.0.0.1"
+      local_port: 5080
+      timeout: 30
+      retry_count: 3
+      caller_uri: "sip:alice@127.0.0.1:5060"
+      callee_uri: "sip:bob@127.0.0.1:5060"
+      call_duration: 5
+    steps:
+      - action: "send_invite"
+        description: "发送INVITE请求"
+      - action: "wait_for_200ok"
+        description: "等待200 OK响应"
+      - action: "send_ack"
+        description: "发送ACK确认"
+      - action: "maintain_call"
+        description: "维持通话连接"
+      - action: "send_bye"
+        description: "发送BYE请求终止呼叫"
+      - action: "wait_for_200ok_bye"
+        description: "等待BYE的200 OK响应"
+    expected_results:
+      - "成功发送INVITE请求"
+      - "在规定时间内收到200 OK响应"
+      - "成功发送ACK确认"
+      - "通话维持指定时长"
+      - "成功发送BYE请求"
+      - "收到BYE的200 OK响应"
+    metadata:
+      priority: "high"
+      category: "functional"
+      author: "sip-test-team"
+      tags: ["basic", "call", "regression"]
+      environment: "local"
+    prerequisites:
+      - "SIP服务器正在运行"
+      - "网络连接正常"
+      - "端口5060可用"
+
+  - name: "呼叫拒绝测试"
+    description: "测试当被叫方拒绝呼叫时的SIP流程"
+    type: "reject_call"
+    config:
+      server_host: "127.0.0.1"
+      server_port: 5060
+      caller_uri: "sip:charlie@127.0.0.1:5060"
+      callee_uri: "sip:diana@127.0.0.1:5060"
+      timeout: 10
+    steps:
+      - action: "send_invite"
+        description: "发送INVITE请求"
+      - action: "wait_for_busy_here"
+        description: "等待603 Busy Here响应或其他拒绝响应"
+    expected_results:
+      - "成功发送INVITE请求"
+      - "在规定时间内收到拒绝响应（如603 Busy Here）"
+    metadata:
+      priority: "medium"
+      category: "negative"
+      tags: ["reject", "error_handling"]
+    prerequisites:
+      - "被叫方设置为拒绝所有呼叫"
+
+  - name: "OPTIONS消息测试"
+    description: "测试SIP OPTIONS消息的功能"
+    type: "options"
+    config:
+      server_host: "127.0.0.1"
+      server_port: 5060
+      target_uri: "sip:test@127.0.0.1:5060"
+      timeout: 10
+    steps:
+      - action: "send_options"
+        description: "发送OPTIONS请求"
+      - action: "wait_for_200ok"
+        description: "等待200 OK响应"
+    expected_results:
+      - "成功发送OPTIONS请求"
+      - "在规定时间内收到200 OK响应"
+      - "响应包含Server头信息"
+      - "响应包含Accept头信息"
+    metadata:
+      priority: "low"
+      category: "functional"
+      tags: ["options", "probing"]
+    prerequisites:
+      - "SIP服务器支持OPTIONS方法"
+
+  - name: "SIP消息格式验证测试"
+    description: "验证SIP消息是否符合RFC标准格式"
+    type: "message_format"
+    config:
+      test_message: |
+        INVITE sip:bob@127.0.0.1:5060 SIP/2.0
+        Via: SIP/2.0/UDP 127.0.0.1:5080;branch=z9hG4bK123456
+        From: <sip:alice@127.0.0.1:5060>;tag=123456
+        To: <sip:bob@127.0.0.1:5060>
+        Call-ID: test-call-123456@127.0.0.1
+        CSeq: 1 INVITE
+        Content-Type: application/sdp
+        Content-Length: 0
+    steps:
+      - action: "parse_message"
+        description: "解析SIP消息格式"
+      - action: "validate_headers"
+        description: "验证必需的头部字段"
+      - action: "validate_syntax"
+        description: "验证语法正确性"
+    expected_results:
+      - "消息格式符合SIP RFC标准"
+      - "所有必需头部字段存在"
+      - "语法解析无错误"
+    metadata:
+      priority: "high"
+      category: "validation"
+      tags: ["format", "rfc_compliance"]
+    prerequisites:
+      - "消息格式验证器可用"

@@ -1,20 +1,14 @@
-# AutoTestForUG - 软交换系统自动化测试平台
-# 核心依赖包
+# SIP自动化测试系统 - Python依赖
+# 请注意：SIPp、PJSIP等系统级工具需要单独安装
 
 # 基础框架
 requests>=2.25.1
 pandas>=1.3.0
 numpy>=1.21.0
 configparser>=5.0.0
-logging>=0.4.9.6
-
-# SIP测试相关
-doubango>=1.0.0  # SIP/IMS (VoIP) 客户端组件
-sipp>=3.6.0      # SIP协议性能测试工具
 
 # 性能监控
 psutil>=5.8.0    # 系统性能监控
-nmon>=1.0.0      # 系统性能监控工具
 
 # 测试框架
 pytest>=6.2.4
@@ -27,8 +21,7 @@ python-docx>=0.8.11  # Word文档生成
 matplotlib>=3.4.2  # 图表绘制
 seaborn>=0.11.1    # 数据可视化
 
-# GUI界面 (可选)
-tkinter>=0.1.0     # Python内置GUI库
+# GUI界面
 PyQt5>=5.15.4      # 高级GUI库
 
 # 网络协议

@@ -105,47 +105,31 @@ def export_data(self, data: list, filename: str):
 - `data`: 监控数据列表
 - `filename`: 输出文件名
 
-### 2.3 业务测试套件 (business_test/business_test_suite.py)
+### 2.3 pytest测试套件 (pytest_sip_tests/)
 
-#### BusinessTestSuite类
+#### pytest_sip_tests包结构
 
-##### 构造函数
-```python
-def __init__(self, config: dict, logger=None):
-```
-- `config`: 配置字典
-- `logger`: 日志记录器
+包含以下主要模块：
+- `fixtures.py`: pytest fixtures，管理端口池、客户端实例等资源
+- `sip_dsl.py`: SIP特定领域语言，提供简洁的API定义SIP测试场景
+- `test_case_parser.py`: 解析YAML/JSON格式的测试用例定义
+- `report_generator.py`: 生成多格式测试报告（JSON, HTML, Text）
+- `test_executor.py`: 测试执行器，集成pytest运行并提供命令行接口
 
-##### load_test_cases方法
-```python
-def load_test_cases(self, test_cases_file: str = '../config/test_cases.ini'):
-```
-加载测试用例
-- `test_cases_file`: 测试用例文件路径
+#### 核心功能模块
 
-##### execute_test_case方法
-```python
-def execute_test_case(self, test_case: dict) -> dict:
-```
-执行单个测试用例
-- `test_case`: 测试用例字典
-- 返回值: 测试结果
+##### Fixtures
+- `port_pool`: 端口池管理，为测试提供可用端口
+- `sip_client_factory`: SIP客户端工厂，创建和管理SIP客户端实例
+- `test_environment`: 测试环境管理，支持不同测试模式
 
-##### execute_test_suite方法
-```python
-def execute_test_suite(self, test_case_ids: Optional[List[str]] = None) -> List[dict]:
-```
-执行测试套件
-- `test_case_ids`: 要执行的测试用例ID列表
-- 返回值: 测试结果列表
+##### SIP DSL (Domain Specific Language)
+- `SIPCallFlow`: 定义SIP呼叫流程的DSL，支持流式调用风格
+- `SIPMessageValidator`: SIP消息验证器，提供灵活的消息匹配和验证功能
 
-##### generate_report方法
-```python
-def generate_report(self, results: List[dict], output_file: str = 'test_report.html'):
-```
-生成测试报告
-- `results`: 测试结果列表
-- `output_file`: 输出文件名
+##### 测试执行器
+- `TestExecutor.execute_pytest_suite`: 执行pytest测试套件
+- `TestExecutor.run_pytest_with_config`: 使用配置文件运行pytest测试
 
 ### 2.4 配置管理器 (config/config.py)
 

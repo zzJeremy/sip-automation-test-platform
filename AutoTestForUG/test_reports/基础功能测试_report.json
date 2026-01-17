@@ -1,0 +1,25 @@
+{
+  "suite_name": "基础功能测试",
+  "total": 2,
+  "passed": 1,
+  "failed": 1,
+  "error": 0,
+  "skipped": 0,
+  "start_time": 1767867346.2356167,
+  "test_results": [
+    {
+      "name": "Basic Call Test",
+      "status": "failed",
+      "duration": 0.008269548416137695,
+      "error_info": null
+    },
+    {
+      "name": "SIP INVITE Message Format Test",
+      "status": "passed",
+      "duration": 0.0015149116516113281,
+      "error_info": null
+    }
+  ],
+  "end_time": 1767867346.2454011,
+  "total_duration": 0.009784460067749023
+}

@@ -144,7 +144,7 @@ python main.py
 ## 9. 维护和扩展
 
 ### 9.1 添加新测试类型
-通过扩展business_test_suite.py模块添加新的测试类型。
+通过在pytest_sip_tests/test_basic_calls.py中添加新的pytest测试函数来创建新的测试类型，或通过编写YAML/JSON格式的测试用例来定义新的测试场景。
 
 ### 9.2 自定义监控指标
 通过修改performance_monitor.py添加新的监控指标。

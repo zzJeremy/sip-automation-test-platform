@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from test_client.sip_test_client import SIPTestClient
 from monitor_client.performance_monitor import PerformanceMonitor
 from config.config import load_config
+from port_manager import get_global_resource_manager
 
 
 def setup_logging(config_path: str = './AutoTestForUG/config/config.ini'):
@@ -123,6 +124,15 @@ def main():
     logger = logging.getLogger(__name__)
     
     logger.info("启动AutoTestForUG SIP自动化测试系统")
+    
+    # 初始化端口资源管理器
+    try:
+        resource_manager = get_global_resource_manager()
+        logger.info(f"端口资源管理器初始化完成，可用端口数: {resource_manager.port_pool.available_count}")
+    except Exception as e:
+        logger.error(f"端口资源管理器初始化失败: {e}")
+        import traceback
+        logger.error(f"详细错误信息: {traceback.format_exc()}")
     
     try:
         # 加载配置
@@ -269,8 +279,26 @@ def main():
         
         logger.info("AutoTestForUG测试完成")
         
+        # 清理端口资源
+        try:
+            resource_manager = get_global_resource_manager()
+            cleaned_sessions = resource_manager.cleanup_stale_sessions(max_age_seconds=0)  # 清理所有会话
+            logger.info(f"已清理 {cleaned_sessions} 个会话资源")
+            logger.info(f"清理后可用端口数: {resource_manager.port_pool.available_count}")
+        except Exception as e:
+            logger.error(f"清理端口资源时出错: {e}")
+        
     except Exception as e:
         logger.error(f"AutoTestForUG运行出错: {str(e)}")
+        
+        # 即使出现错误也要尝试清理资源
+        try:
+            resource_manager = get_global_resource_manager()
+            cleaned_sessions = resource_manager.cleanup_stale_sessions(max_age_seconds=0)  # 清理所有会话
+            logger.info(f"错误后清理 {cleaned_sessions} 个会话资源")
+        except Exception as cleanup_error:
+            logger.error(f"错误后清理资源也失败: {cleanup_error}")
+        
         sys.exit(1)
 
 

@@ -1,0 +1,39 @@
+{
+  "global": {
+    "server_host": "127.0.0.1",
+    "server_port": 5060,
+    "local_host": "127.0.0.1",
+    "local_port": 5080,
+    "timeout": 30,
+    "retry_count": 3
+  },
+  "test_suites": [
+    {
+      "name": "basic_call_tests",
+      "description": "基础呼叫功能测试套件",
+      "test_cases": [
+        {
+          "type": "basic_call",
+          "config": {
+            "caller_uri": "sip:alice@127.0.0.1:5060",
+            "callee_uri": "sip:bob@127.0.0.1:5060",
+            "call_duration": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "message_format_tests",
+      "description": "SIP消息格式测试套件",
+      "test_cases": [
+        {
+          "type": "message_format",
+          "config": {
+            "message_type": "INVITE",
+            "message_content": "INVITE sip:test@127.0.0.1:5060 SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1:5080;branch=z9hG4bK123456\r\nFrom: <sip:alice@127.0.0.1:5060>;tag=12345\r\nTo: <sip:bob@127.0.0.1:5060>\r\nCall-ID: 123456@127.0.0.1\r\nCSeq: 1 INVITE\r\nContent-Length: 0"
+          }
+        }
+      ]
+    }
+  ]
+}

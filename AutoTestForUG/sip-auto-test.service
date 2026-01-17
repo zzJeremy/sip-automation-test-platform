@@ -1,0 +1,24 @@
+[Unit]
+Description=SIP自动化测试平台服务
+After=network.target
+
+[Service]
+Type=simple
+User=sip-test
+Group=sip-test
+WorkingDirectory=/opt/sip-auto-test
+Environment=PYTHONPATH=/opt/sip-auto-test
+ExecStart=/usr/bin/python3 -m AutoTestForUG.main --test-type all
+Restart=always
+RestartSec=10
+
+# 系统资源限制
+LimitNOFILE=65536
+LimitNPROC=32768
+
+# 安全选项
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
