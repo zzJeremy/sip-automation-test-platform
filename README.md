@@ -100,12 +100,17 @@ poetry install
    python -m pytest AutoTestForUG/tests/ -v
    ```
 
-3. **运行主程序**：
+3. **运行测试覆盖率评估**：
+   ```bash
+   python -m pytest AutoTestForUG/tests/ --cov=AutoTestForUG --cov-report=html
+   ```
+
+4. **运行主程序**：
    ```bash
    python AutoTestForUG/main.py
    ```
 
-4. **从YAML配置运行测试**：
+5. **从YAML配置运行测试**：
    ```bash
    python AutoTestForUG/execute_call_forwarding_test.py
    ```
@@ -304,6 +309,58 @@ AutoTestForUG/
    ```bash
    python -c "import pjsua2; print('PJSIP库安装成功')"
    ```
+
+## 测试与重构
+
+### 测试覆盖
+项目采用了全面的测试策略，确保代码质量和功能正确性：
+
+- **单元测试**：覆盖核心模块和关键功能
+- **测试覆盖率**：使用`pytest-cov`生成详细的测试覆盖报告
+- **测试目录结构**：
+  - `tests/business_layer/`：业务层测试
+  - `tests/core/`：核心功能测试
+  - `tests/sip_client/`：SIP客户端测试
+
+### 重构优化
+项目持续进行代码重构和优化，主要包括：
+
+1. **核心模块优化**：
+   - 优化了`SIPCallFlow`的执行逻辑
+   - 增强了错误处理和状态管理
+   - 改进了RFC 3261合规性验证
+
+2. **客户端管理**：
+   - 实现了统一的客户端管理架构
+   - 添加了重连机制，提高稳定性
+   - 标准化了返回值和异常处理
+
+3. **性能优化**：
+   - 为报告生成添加了异步支持
+   - 优化了配置文件路径处理
+   - 提高了测试执行效率
+
+### TDD实践
+项目采用测试驱动开发(TDD)的实践方法：
+
+1. **先写测试**：为新功能或重构编写测试用例
+2. **运行测试**：验证测试失败（红）
+3. **实现功能**：编写代码使测试通过（绿）
+4. **重构代码**：优化代码结构和性能
+5. **再次测试**：确保重构后测试仍然通过
+
+### 测试执行命令
+
+```bash
+# 运行所有测试
+python -m pytest AutoTestForUG/tests/ -v
+
+# 运行测试并生成覆盖报告
+python -m pytest AutoTestForUG/tests/ --cov=AutoTestForUG --cov-report=html
+
+# 运行特定模块的测试
+python -m pytest AutoTestForUG/tests/sip_client/ -v
+```
 
 ## 开发计划
 

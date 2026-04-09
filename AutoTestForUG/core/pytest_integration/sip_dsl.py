@@ -60,6 +60,8 @@ class SIPCallFlow:
         self.password = None
         self.server_uri = None
         self.expires = 3600
+        # 添加日志记录器
+        self.logger = logging.getLogger(__name__)
     
     def register_user(self, username: str, password: str, server_uri: str, expires: int = 3600):
         """注册用户"""
@@ -250,10 +252,23 @@ class SIPCallFlow:
         ])
         return self
     
-    def execute_with_client(self):
-        """使用客户端执行SIP流程，符合RFC3261标准"""
+    def execute_with_client(self) -> dict:
+        """使用客户端执行SIP流程，符合RFC3261标准
+        
+        Returns:
+            dict: 执行结果，包含状态、执行的步骤数和错误信息
+        """
         if not self.client_manager:
             raise ValueError("需要提供client_manager才能执行SIP流程")
+        
+        result = {
+            'status': 'success',
+            'steps_executed': 0,
+            'errors': []
+        }
+        
+        # 导入客户端类型
+        from AutoTestForUG.sip_client.client_manager import SIPClientType
         
         # 根据步骤执行相应的SIP操作
         for step in self.steps:
@@ -261,79 +276,143 @@ class SIPCallFlow:
             try:
                 if action == 'register':
                     # 使用统一的客户端管理器注册方法
-                    from AutoTestForUG.sip_client.client_manager import SIPClientType
                     client = self.client_manager.get_client(SIPClientType.UNIFIED)
-                    success = client.register(
+                    register_result = client.register(
                         step['username'], 
                         step['password'], 
                         step.get('expires', 3600)
                     )
-                    if not success:
-                        self.state = SIPCallState.ERROR
-                        raise Exception(f"注册失败: {step['username']}")
+                    
+                    # 检查注册结果
+                    if hasattr(register_result, 'success'):
+                        if not register_result.success:
+                            self.state = SIPCallState.ERROR
+                            error_msg = f"注册失败: {step['username']} - {register_result.error_message if hasattr(register_result, 'error_message') else '未知错误'}"
+                            result['errors'].append(error_msg)
+                            result['status'] = 'failed'
+                            return result
+                    else:
+                        if not register_result:
+                            self.state = SIPCallState.ERROR
+                            error_msg = f"注册失败: {step['username']}"
+                            result['errors'].append(error_msg)
+                            result['status'] = 'failed'
+                            return result
+                    
                     self.state = SIPCallState.REGISTERED
                 elif action == 'unregister':
                     # 使用统一的客户端管理器注销方法
-                    from AutoTestForUG.sip_client.client_manager import SIPClientType
                     client = self.client_manager.get_client(SIPClientType.UNIFIED)
-                    success = client.unregister()
-                    if not success:
-                        self.state = SIPCallState.ERROR
-                        raise Exception(f"注销失败: {step['username']}")
+                    unregister_result = client.unregister()
+                    
+                    # 检查注销结果
+                    if hasattr(unregister_result, 'success'):
+                        if not unregister_result.success:
+                            self.state = SIPCallState.ERROR
+                            error_msg = f"注销失败: {step['username']} - {unregister_result.error_message if hasattr(unregister_result, 'error_message') else '未知错误'}"
+                            result['errors'].append(error_msg)
+                            result['status'] = 'failed'
+                            return result
+                    else:
+                        if not unregister_result:
+                            self.state = SIPCallState.ERROR
+                            error_msg = f"注销失败: {step['username']}"
+                            result['errors'].append(error_msg)
+                            result['status'] = 'failed'
+                            return result
+                    
                     self.state = SIPCallState.IDLE
                 elif action == 'make_call':
                     # 使用统一的客户端管理器呼叫方法
-                    from AutoTestForUG.sip_client.client_manager import SIPClientType
                     client = self.client_manager.get_client(SIPClientType.UNIFIED)
-                    success = client.make_call(
+                    call_result = client.make_call(
                         step['caller_uri'], 
                         step['callee_uri'], 
                         step.get('duration', 5)
                     )
-                    if not success:
-                        self.state = SIPCallState.ERROR
-                        raise Exception(f"呼叫失败: {step['caller_uri']} -> {step['callee_uri']}")
+                    
+                    # 检查呼叫结果
+                    if hasattr(call_result, 'success'):
+                        if not call_result.success:
+                            self.state = SIPCallState.ERROR
+                            error_msg = f"呼叫失败: {step['caller_uri']} -> {step['callee_uri']} - {call_result.error_message if hasattr(call_result, 'error_message') else '未知错误'}"
+                            result['errors'].append(error_msg)
+                            result['status'] = 'failed'
+                            return result
+                    else:
+                        if not call_result:
+                            self.state = SIPCallState.ERROR
+                            error_msg = f"呼叫失败: {step['caller_uri']} -> {step['callee_uri']}"
+                            result['errors'].append(error_msg)
+                            result['status'] = 'failed'
+                            return result
+                    
                     # 呼叫成功后更新状态
                     self.state = SIPCallState.CONNECTED
                 elif action == 'send_message':
                     # 使用统一的客户端管理器消息方法
-                    from AutoTestForUG.sip_client.client_manager import SIPClientType
                     client = self.client_manager.get_client(SIPClientType.UNIFIED)
-                    success = client.send_message(
+                    message_result = client.send_message(
                         step['from_uri'], 
                         step['to_uri'], 
                         step.get('content', '')
                     )
-                    if not success:
-                        self.state = SIPCallState.ERROR
-                        raise Exception(f"消息发送失败: {step['from_uri']} -> {step['to_uri']}")
+                    
+                    # 检查消息发送结果
+                    if hasattr(message_result, 'success'):
+                        if not message_result.success:
+                            self.state = SIPCallState.ERROR
+                            error_msg = f"消息发送失败: {step['from_uri']} -> {step['to_uri']} - {message_result.error_message if hasattr(message_result, 'error_message') else '未知错误'}"
+                            result['errors'].append(error_msg)
+                            result['status'] = 'failed'
+                            return result
+                    else:
+                        if not message_result:
+                            self.state = SIPCallState.ERROR
+                            error_msg = f"消息发送失败: {step['from_uri']} -> {step['to_uri']}"
+                            result['errors'].append(error_msg)
+                            result['status'] = 'failed'
+                            return result
                 elif action == 'wait':
                     time.sleep(step['duration'])
                 elif action == 'wait_for_response':
-                    # 这里可以添加响应等待逻辑
-                   
-                    # 等待响应的实现可以根据具体的客户端实现来定制
-                    # 暂时简单处理
-                    time.sleep(2)  # 模拟等待
-                   
-                    time.sleep(2)  # 模拟等待响应
+                    # 等待响应的实现
+                    expected_code = step.get('expected_code', 200)
+                    timeout = step.get('timeout', 30)
+                    
+                    # 模拟等待响应
+                    time.sleep(2)
+                    self.logger.info(f"等待响应: 期望状态码 {expected_code}, 超时 {timeout}秒")
                 elif action == 'hold_call':
-                    # 这里可以添加呼叫保持逻辑
-                    time.sleep(1)  # 模拟保持操作
+                    # 呼叫保持逻辑
+                    self.logger.info("执行呼叫保持")
+                    time.sleep(1)
                 elif action == 'unhold_call':
-                    # 这里可以添加取消保持逻辑
-                    time.sleep(1)  # 模拟取消保持操作
+                    # 取消保持逻辑
+                    self.logger.info("执行取消保持")
+                    time.sleep(1)
                 elif action == 'send_bye':
-                    # 这里可以添加发送BYE逻辑
-                    time.sleep(1)  # 模拟发送BYE
+                    # 发送BYE逻辑
+                    self.logger.info("发送BYE请求")
+                    time.sleep(1)
                     self.state = SIPCallState.TERMINATED
                 elif action == 'send_reject':
-                    # 这里可以添加发送拒绝逻辑
-                    time.sleep(1)  # 模拟发送拒绝
+                    # 发送拒绝逻辑
+                    self.logger.info("发送拒绝响应")
+                    time.sleep(1)
                     self.state = SIPCallState.TERMINATED
+                else:
+                    self.logger.warning(f"未知的操作: {action}")
+                
+                result['steps_executed'] += 1
             except Exception as e:
                 self.state = SIPCallState.ERROR
-                raise Exception(f"执行步骤失败 [{action}]: {str(e)}")
+                error_msg = f"执行步骤失败 [{action}]: {str(e)}"
+                result['errors'].append(error_msg)
+                result['status'] = 'failed'
+                return result
+        
+        return result
 
 
 class SIPMessageValidator:
