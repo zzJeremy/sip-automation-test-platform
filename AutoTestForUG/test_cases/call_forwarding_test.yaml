@@ -1,0 +1,152 @@
+# 无条件前转功能测试用例
+# 测试场景：A呼叫B，B开通无条件前转（测试设备提前开通），验证是否可无条件转移到C
+# 预设条件：A、B、C号码分别为 670491、670492、670493，密码都是1234
+
+test_cases:
+  - name: "无条件前转功能测试"
+    description: "测试A呼叫B，B开通无条件前转到C，验证呼叫是否成功转移到C"
+    type: "call_forwarding"
+    markers:
+      - "call_forwarding"
+      - "unconditional"
+      - "rfc3261"
+    config:
+      server_host: "127.0.0.1"
+      server_port: 5060
+      local_host: "127.0.0.1"
+      timeout: 60
+      retry_count: 3
+      caller_uri: "sip:670491@127.0.0.1:5060"  # A号码 - 主叫方
+      callee_uri: "sip:670492@127.0.0.1:5060"    # B号码 - 被叫方，需配置无条件前转
+      forward_to_uri: "sip:670493@127.0.0.1:5060"  # C号码 - 前转目标
+    parameters:
+      - name: "caller_uri"
+        values: ["sip:670491@127.0.0.1:5060"]
+      - name: "callee_uri" 
+        values: ["sip:670492@127.0.0.1:5060"]
+      - name: "forward_to_uri"
+        values: ["sip:670493@127.0.0.1:5060"]
+    steps:
+      # 步骤1: 配置B用户的无条件前转到C用户
+      - action: "configure_call_forwarding"
+        description: "配置B用户的无条件前转到C用户"
+        params:
+          forward_config:
+            username: "670492"
+            destination: "670493"
+            type: "all"  # 无条件前转
+        expected_result: "成功配置B用户的无条件前转到C用户"
+
+      # 步骤2: A用户发起呼叫到B用户
+      - action: "send_invite"
+        description: "A用户发起呼叫到B用户"
+        params:
+          caller_uri: "sip:670491@127.0.0.1:5060"
+          callee_uri: "sip:670492@127.0.0.1:5060"
+        expected_result: "INVITE请求被发送，但应该被转发到C用户"
+
+      # 步骤3: 验证呼叫被转移到C用户
+      - action: "verify_call_forwarding"
+        description: "验证呼叫被转移到C用户"
+        params:
+          caller_uri: "sip:670491@127.0.0.1:5060"
+          target_uri: "sip:670493@127.0.0.1:5060"
+        expected_result: "A与C之间建立通话连接，B未参与通话"
+
+      # 步骤4: 维持A与C之间的通话连接
+      - action: "maintain_call"
+        description: "维持A与C之间的通话连接"
+        params:
+          caller_uri: "sip:670491@127.0.0.1:5060"
+          callee_uri: "sip:670493@127.0.0.1:5060"
+          duration: 10
+        expected_result: "A与C之间的通话持续10秒"
+
+      # 步骤5: 结束A与C之间的通话
+      - action: "send_bye"
+        description: "结束A与C之间的通话"
+        params:
+          caller_uri: "sip:670491@127.0.0.1:5060"
+          target_uri: "sip:670493@127.0.0.1:5060"
+        expected_result: "BYE请求成功发送，通话正常结束"
+
+      # 步骤6: 验证B用户未参与通话
+      - action: "verify_no_participation"
+        description: "验证B用户未参与此次通话"
+        params:
+          user_uri: "sip:670492@127.0.0.1:5060"
+        expected_result: "B用户没有收到任何与本次通话相关的SIP消息"
+
+    expected_results:
+      - "成功配置B用户的无条件前转到C用户"
+      - "A成功发起呼叫到B"
+      - "呼叫被无条件转移到C用户"
+      - "A与C之间建立通话连接"
+      - "B用户未参与此次通话"
+      - "A与C之间的通话正常结束"
+      
+    metadata:
+      priority: "high"
+      category: "functional"
+      author: "sip-test-team"
+      tags: ["call_forwarding", "unconditional", "transfer", "regression", "rfc3261"]
+      environment: "local"
+      
+    prerequisites:
+      - "SIP服务器(Asterisk)正在运行"
+      - "网络连接正常"
+      - "A、B、C三个用户都已在服务器上注册"
+      - "Asterisk AMI接口可用"
+      - "B用户具有配置呼叫转移的权限"
+      - "服务器支持呼叫转移功能"
+
+  - name: "多个无条件前转场景测试"
+    description: "测试多个不同的无条件前转场景，验证功能的稳定性"
+    type: "call_forwarding"
+    markers:
+      - "call_forwarding"
+      - "unconditional"
+      - "stress"
+    config:
+      server_host: "127.0.0.1"
+      server_port: 5060
+      local_host: "127.0.0.1"
+      timeout: 60
+      retry_count: 2
+    parameters:
+      - name: "caller_uri"
+        values: ["sip:670491@127.0.0.1:5060", "sip:670494@127.0.0.1:5060"]
+      - name: "callee_uri" 
+        values: ["sip:670492@127.0.0.1:5060", "sip:670495@127.0.0.1:5060"]
+      - name: "forward_to_uri"
+        values: ["sip:670493@127.0.0.1:5060", "sip:670496@127.0.0.1:5060"]
+    steps:
+      - action: "configure_call_forwarding"
+        description: "配置被叫用户的无条件前转"
+        params:
+          forward_config:
+            username: "${callee_uri.split(':')[1].split('@')[0]}"  # 动态提取用户名
+            destination: "${forward_to_uri.split(':')[1].split('@')[0]}"
+            type: "all"
+        expected_result: "成功配置无条件前转"
+      - action: "make_call_with_forwarding"
+        description: "发起呼叫并验证前转"
+        params:
+          caller_uri: "${caller_uri}"
+          callee_uri: "${callee_uri}"
+          forward_to_uri: "${forward_to_uri}"
+        expected_result: "呼叫成功转移到目标用户"
+    expected_results:
+      - "所有前转配置成功"
+      - "所有呼叫都被正确转移到目标用户"
+      - "通话建立成功"
+    metadata:
+      priority: "medium"
+      category: "stress"
+      tags: ["call_forwarding", "unconditional", "multiple_scenarios"]
+      environment: "local"
+    prerequisites:
+      - "SIP服务器(Asterisk)正在运行"
+      - "网络连接正常"
+      - "所有用户都已在服务器上注册"
+      - "Asterisk AMI接口可用"

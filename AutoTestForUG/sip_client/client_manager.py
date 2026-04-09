@@ -164,7 +164,14 @@ def create_default_client(config: Dict[str, Any] = None) -> SIPClientBase:
     
     # 尝试创建PJSIP客户端，如果失败则使用socket客户端
     try:
-        return manager.create_client(SIPClientType.PJSIP)
-    except ImportError:
-        logging.info("PJSIP库不可用，使用socket实现")
+        # 在Windows环境下，我们可以尝试安装PJSIP
+        from .pj_sip_client import PJSIP_AVAILABLE
+        if PJSIP_AVAILABLE:
+            logging.info("PJSIP库可用，正在创建PJSIP客户端")
+            return manager.create_client(SIPClientType.PJSIP)
+        else:
+            logging.info("PJSIP库不可用，使用socket实现")
+            return manager.create_client(SIPClientType.SOCKET)
+    except ImportError as e:
+        logging.info(f"PJSIP库不可用 ({e})，使用socket实现")
         return manager.create_client(SIPClientType.SOCKET)

@@ -94,12 +94,13 @@ def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='SIP自动化测试系统')
     parser.add_argument('--config', type=str, default=None, help='配置文件路径')
-    parser.add_argument('--test-type', type=str, choices=['register', 'call', 'message', 'monitor', 'exception', 'all', 'web', 'web_interface', 'connectivity', 'sip_message', 'performance', 'business', 'conference'],
+    parser.add_argument('--test-type', type=str, choices=['register', 'call', 'message', 'monitor', 'exception', 'all', 'web', 'web_interface', 'connectivity', 'sip_message', 'performance', 'business', 'conference', 'call_forwarding'],
                        default='all', help='测试类型: register(注册测试), call(呼叫测试), message(SIP消息测试), '
                                           'monitor(性能监控), exception(异常测试), all(全部测试), '
                                           'web/web_interface(启动Web界面), connectivity(设备连接性测试), '
                                           'sip_message(SIP消息解析测试), performance(性能测试), '
-                                          'business(业务测试), conference(会议呼叫测试)')
+                                          'business(业务测试), conference(会议呼叫测试), '
+                                          'call_forwarding(呼叫前转测试)')
     parser.add_argument('--duration', type=int, default=60, help='测试持续时间（秒）')
     
     args = parser.parse_args()
@@ -186,6 +187,63 @@ def main():
                     logger.info("执行SIP呼叫测试")
                     sip_client.make_call("sip:caller@127.0.0.1:5060", "sip:callee@127.0.0.1:5060", args.duration)
                 
+                if args.test_type == 'call_forwarding' or args.test_type == 'all':
+                    # 执行呼叫前转测试
+                    logger.info("执行SIP呼叫前转测试")
+                    
+                    # 导入测试用例相关模块
+                    try:
+                        from test_cases.sip_test_case import TestCaseFactory, TestSuite
+                        from test_cases import CallForwardingUnconditionalTestCase, CallForwardingBusyTestCase, CallForwardingNoAnswerTestCase
+                        
+                        # 创建测试套件
+                        forwarding_test_suite = TestSuite("呼叫前转功能测试套件", "验证SIP多种前转功能")
+                        
+                        # 配置测试参数
+                        config = {
+                            'server_host': config.get('SERVER', {}).get('host', '127.0.0.1'),
+                            'server_port': config.get('SERVER', {}).get('port', 5060),
+                            'caller_uri': 'sip:670491@127.0.0.1:5060',
+                            'callee_uri': 'sip:670492@127.0.0.1:5060',
+                            'forward_to_uri': 'sip:670493@127.0.0.1:5060',
+                            'proxy_username': '670491',
+                            'proxy_password': '1234',
+                            'timeout_duration': 30
+                        }
+                        
+                        # 添加无条件前转测试
+                        unconditional_test = CallForwardingUnconditionalTestCase(config)
+                        forwarding_test_suite.add_test_case(unconditional_test)
+                        
+                        # 添加遇忙前转测试
+                        busy_test = CallForwardingBusyTestCase(config)
+                        forwarding_test_suite.add_test_case(busy_test)
+                        
+                        # 添加无应答前转测试
+                        noanswer_test = CallForwardingNoAnswerTestCase(config)
+                        forwarding_test_suite.add_test_case(noanswer_test)
+                        
+                        # 运行测试
+                        results = forwarding_test_suite.run_all()
+                        
+                        logger.info(f"呼叫前转测试结果:")
+                        logger.info(f"  总测试数: {results['total']}")
+                        logger.info(f"  通过: {results['passed']}")
+                        logger.info(f"  失败: {results['failed']}")
+                        logger.info(f"  总耗时: {results['total_duration']:.2f}秒")
+                        
+                        for result in results['test_results']:
+                            status = result['status']
+                            logger.info(f"  {result['name']}: {status}")
+                            
+                    except ImportError as e:
+                        logger.error(f"导入呼叫前转测试模块失败: {e}")
+                        logger.info("请确保test_cases模块可用")
+                    except Exception as e:
+                        logger.error(f"执行呼叫前转测试时出错: {e}")
+                        import traceback
+                        logger.error(f"详细错误信息: {traceback.format_exc()}")
+                
                 if args.test_type == 'message' or args.test_type == 'all':
                     # 执行消息测试
                     logger.info("执行SIP消息测试")
@@ -260,6 +318,31 @@ def main():
                         # 结束会议
                         logger.info("结束会议呼叫")
                         sip_client.end_conference_call(conference_id)
+                
+                if args.test_type == 'business' or args.test_type == 'all':
+                    # 执行业务测试套件
+                    logger.info("执行业务测试套件")
+                    try:
+                        # 导入业务测试相关模块
+                        from business_layer.business_test_suite import BusinessTestSuiteFactory
+                        
+                        # 创建并执行基础SIP业务测试套件
+                        business_suite = BusinessTestSuiteFactory.create_basic_sip_suite()
+                        results = business_suite.execute_suite({})
+                        
+                        logger.info(f"业务测试套件执行完成: {results}")
+                        
+                        # 如果是复合测试类型，继续执行其他测试
+                        if args.test_type != 'all':
+                            logger.info("业务测试套件执行完毕")
+                        
+                    except ImportError as e:
+                        logger.error(f"导入业务测试模块失败: {e}")
+                        logger.info("请确保business_layer模块可用")
+                    except Exception as e:
+                        logger.error(f"执行业务测试时出错: {e}")
+                        import traceback
+                        logger.error(f"详细错误信息: {traceback.format_exc()}")
             
             if args.test_type == 'monitor' or args.test_type == 'all':
                 logger.info("启动性能监控模块")

@@ -5,15 +5,31 @@
 
 from typing import Dict, Any, Optional
 import logging
+import sys
+import os
 
 # 尝试导入PJSIP，如果未安装则提供替代实现
+PJSIP_AVAILABLE = False
+pj = None
+
 try:
     import pjsua2 as pj
     PJSIP_AVAILABLE = True
-except ImportError:
-    PJSIP_AVAILABLE = False
-    logging.warning("PJSIP库未安装，将使用模拟实现")
-    pj = None
+    logging.info("PJSIP库已成功导入")
+except ImportError as e:
+    logging.warning(f"PJSIP库导入失败: {e}，将使用模拟实现")
+    # 尝试通过其他方式查找pjsua2
+    try:
+        # 在Windows环境下，有时需要特殊处理
+        if sys.platform.startswith('win'):
+            # 尝试添加可能的PJSIP安装路径
+            import site
+            site.addsitedir(os.path.join(site.getsitepackages()[0], "pjsip"))
+            import pjsua2 as pj
+            PJSIP_AVAILABLE = True
+            logging.info("从备用路径成功导入PJSIP库")
+    except ImportError:
+        pass
 
 from .sip_client_base import SIPClientBase
 
@@ -32,30 +48,53 @@ class PJSIPSIPClient(SIPClientBase):
             config: 配置参数
         """
         if not PJSIP_AVAILABLE:
-            logging.error("PJSIP库不可用，无法创建PJSIP客户端")
-            raise ImportError("PJSIP库未安装，请运行: pip install pjsua2")
+            logging.warning("PJSIP库不可用，将使用模拟实现")
+            # 初始化模拟状态
+            self.config = config
+            self.ep = None
+            self.account = None
+            self.current_call = None
+            return
         
         self.config = config
-        self.ep = pj.Endpoint()
         
-        # 初始化端点
-        ep_config = pj.EpConfig()
-        self.ep.libCreate()
-        self.ep.libInit(ep_config)
-        
-        # 启动SIP传输
-        transport_config = pj.TransportConfig()
-        transport_config.port = config.get('local_port', 5060)
-        self.transport_id = self.ep.transportCreate(
-            pj.PJSIP_TRANSPORT_UDP, 
-            transport_config
-        )
-        
-        # 启动端点
-        self.ep.libStart()
-        
-        self.account = None
-        self.current_call = None
+        try:
+            self.ep = pj.Endpoint()
+            
+            # 初始化端点
+            ep_config = pj.EpConfig()
+            # 设置用户代理字符串
+            ep_config.userAgent = "AutoTestForUG-PJSIP-Client/1.0"
+            
+            self.ep.libCreate()
+            self.ep.libInit(ep_config)
+            
+            # 启动SIP传输
+            transport_config = pj.TransportConfig()
+            transport_config.port = config.get('local_port', 5060)
+            # 设置绑定地址
+            transport_config.bindAddr = config.get('local_host', '127.0.0.1')
+            
+            self.transport_id = self.ep.transportCreate(
+                pj.PJSIP_TRANSPORT_UDP, 
+                transport_config
+            )
+            
+            # 启动端点
+            self.ep.libStart()
+            
+            self.account = None
+            self.current_call = None
+            
+            logging.info("PJSIP客户端初始化成功")
+            
+        except Exception as e:
+            logging.error(f"PJSIP客户端初始化失败: {e}")
+            # 如果初始化失败，仍然允许创建对象但标记为不可用
+            self.ep = None
+            self.account = None
+            self.current_call = None
+            raise
     
     def register(self, username: str, password: str, expires: int = 3600) -> bool:
         """

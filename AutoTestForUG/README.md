@@ -297,6 +297,58 @@ AutoTestForUG/
 │   ├── __init__.py
 │   ├── business_test_suite.py
 │   └── test_scenario.py
+```
+
+## Windows环境下的PJSIP支持
+
+为了在Windows环境下使用PJSIP协议栈进行SIP测试，项目提供了专门的支持。
+
+### 安装PJSIP库
+
+1. **使用安装脚本**（推荐）：
+   ```bash
+   python install_pjsip_windows.py
+   ```
+
+2. **手动安装**：
+   - 访问 [PJSIP官方发布页面](https://github.com/pjsip/pjproject/releases)
+   - 下载适合您Python版本的pjsua2 wheel文件
+   - 安装wheel文件：
+     ```bash
+     pip install path/to/downloaded/pjsua2-x.x.x-cpxx-cpxxm-win_amd64.whl
+     ```
+   - 注意：cpXX表示Python版本（如cp39表示Python 3.9），amd64表示64位系统
+
+3. **验证安装**：
+   ```bash
+   python -c "import pjsua2; print('PJSIP库安装成功')"
+   ```
+
+### 在项目中使用PJSIP
+
+一旦PJSIP库安装成功，您可以直接在测试中使用PJSIP客户端：
+
+```python
+from AutoTestForUG.sip_client.client_manager import SIPClientManager
+from AutoTestForUG.sip_client.client_selection_strategy import SIPClientType
+
+# 创建PJSIP客户端
+manager = SIPClientManager(config={'local_port': 5080})
+pj_client = manager.create_client(SIPClientType.PJSIP)
+
+# 执行SIP操作
+pj_client.register('username', 'password', 'sip_server_address')
+pj_client.make_call('sip:alice@server.com', 'sip:bob@server.com')
+```
+
+### 故障排除
+
+如果遇到PJSIP相关问题：
+
+1. **检查Python版本兼容性**：确保wheel文件与Python版本匹配
+2. **安装Visual C++ Redistributable**：PJSIP需要相应的运行库
+3. **防火墙设置**：确保SIP端口未被阻止
+4. **权限问题**：以管理员身份运行Python或IDE
 ├── config/                 # 配置文件
 ├── docs/                   # 文档
 ├── pytest_sip_tests/       # 核心层 - 基于pytest的测试执行

@@ -7,6 +7,9 @@ from .sip_test_case import (
     BasicCallTestCase,
     SIPMessageFormatTestCase,
     SIPResponseTestCase,
+    CallForwardingUnconditionalTestCase,
+    CallForwardingBusyTestCase,
+    CallForwardingNoAnswerTestCase,
     TestCaseFactory,
     TestSuite
 )
@@ -16,6 +19,9 @@ __all__ = [
     'BasicCallTestCase',
     'SIPMessageFormatTestCase',
     'SIPResponseTestCase',
+    'CallForwardingUnconditionalTestCase',
+    'CallForwardingBusyTestCase',
+    'CallForwardingNoAnswerTestCase',
     'TestCaseFactory',
     'TestSuite'
 ]

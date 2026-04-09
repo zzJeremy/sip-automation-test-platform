@@ -6,58 +6,221 @@
 
 ## 2. 核心模块API
 
-### 2.1 SIP测试客户端 (test_client/sip_test_client.py)
+### 2.1 SIP客户端基类 (sip_client/sip_client_base.py)
 
-#### SIPTestClient类
+#### SIPClientBase类
 
 ##### 构造函数
 ```python
-def __init__(self, server_host: str, server_port: int, protocol: str = 'UDP', logger=None):
+def __init__(self, client_id: str, local_port: int = None):
 ```
-- `server_host`: SIP服务器地址
-- `server_port`: SIP服务器端口
-- `protocol`: 传输协议 ('UDP' 或 'TCP')
-- `logger`: 日志记录器
+- `client_id`: 客户端唯一标识
+- `local_port`: 本地端口号
 
 ##### register方法
 ```python
-def register(self, username: str, password: str, domain: str) -> bool
+def register(self, registrar_uri: str, username: str, password: str) -> bool
 ```
 执行SIP注册操作
+- `registrar_uri`: 注册服务器URI
 - `username`: 用户名
 - `password`: 密码
-- `domain`: 域名
 - 返回值: 注册是否成功
 
 ##### make_call方法
 ```python
-def make_call(self, caller: str, callee: str) -> bool
+def make_call(self, callee_uri: str, timeout: int = 30) -> bool
 ```
 发起SIP呼叫
-- `caller`: 主叫号码
-- `callee`: 被叫号码
+- `callee_uri`: 被叫方URI
+- `timeout`: 超时时间（秒）
 - 返回值: 呼叫是否成功建立
 
 ##### send_message方法
 ```python
-def send_message(self, sender: str, recipient: str, content: str) -> bool
+def send_message(self, recipient_uri: str, message: str) -> bool
 ```
 发送SIP消息
-- `sender`: 发送方
-- `recipient`: 接收方
-- `content`: 消息内容
+- `recipient_uri`: 接收方URI
+- `message`: 消息内容
 - 返回值: 消息是否发送成功
 
-##### send_request方法
+##### close方法
 ```python
-def send_request(self, method: str, uri: str, headers: dict = None, body: str = '') -> Optional[dict]
+def close(self):
 ```
-发送SIP请求
-- `method`: SIP方法
-- `uri`: 请求URI
-- `headers`: 请求头
-- `body`: 请求体
-- 返回值: 响应字典或None
+关闭客户端连接
+
+### 2.2 SIP测试场景管理 (business_layer/enhanced_test_scenario.py)
+
+#### EnhancedTestScenario类
+
+##### 构造函数
+```python
+def __init__(self, name: str, description: str = "", requirement: TestRequirement = None):
+```
+- `name`: 场景名称
+- `description`: 场景描述
+- `requirement`: 测试需求类型
+
+##### execute方法
+```python
+def execute(self, config: Dict[str, Any]) -> Dict[str, Any]:
+```
+执行测试场景
+- `config`: 配置参数
+- 返回值: 执行结果字典
+
+##### add_step方法
+```python
+def add_step(self, step: Dict[str, Any]):
+```
+添加测试步骤
+- `step`: 步骤定义字典
+
+#### TestScenarioManager类
+
+##### 构造函数
+```python
+def __init__(self, config: Dict[str, Any] = None):
+```
+- `config`: 配置参数
+
+##### execute_all_scenarios方法
+```python
+def execute_all_scenarios(self) -> List[Dict[str, Any]]:
+```
+执行所有测试场景
+- 返回值: 所有场景的执行结果列表
+
+### 2.3 SIP DSL (core/pytest_integration/sip_dsl.py)
+
+#### SIPCallFlow类
+
+##### 构造函数
+```python
+def __init__(self, caller_uri: str, callee_uri: str, client_manager=None):
+```
+- `caller_uri`: 主叫方URI
+- `callee_uri`: 被叫方URI
+- `client_manager`: 客户端管理器
+
+##### make_call方法
+```python
+def make_call(self, duration: int = 5):
+```
+发起呼叫
+- `duration`: 通话时长（秒）
+- 返回值: 当前实例（支持链式调用）
+
+##### wait_for_ringing方法
+```python
+def wait_for_ringing(self):
+```
+等待振铃响应
+- 返回值: 当前实例（支持链式调用）
+
+##### wait_for_answer方法
+```python
+def wait_for_answer(self):
+```
+等待接听响应
+- 返回值: 当前实例（支持链式调用）
+
+##### hold_call方法
+```python
+def hold_call(self):
+```
+保持呼叫
+- 返回值: 当前实例（支持链式调用）
+
+##### unhold_call方法
+```python
+def unhold_call(self):
+```
+取消保持
+- 返回值: 当前实例（支持链式调用）
+
+##### reject_call方法
+```python
+def reject_call(self):
+```
+拒绝呼叫
+- 返回值: 当前实例（支持链式调用）
+
+##### wait方法
+```python
+def wait(self, seconds: int):
+```
+等待指定秒数
+- `seconds`: 等待秒数
+- 返回值: 当前实例（支持链式调用）
+
+##### terminate_call方法
+```python
+def terminate_call(self):
+```
+终止呼叫
+- 返回值: 当前实例（支持链式调用）
+
+#### SIPMessageValidator类
+
+##### validate_invite方法
+```python
+def validate_invite(message: str) -> bool:
+```
+验证INVITE消息格式
+- `message`: SIP消息字符串
+- 返回值: 是否为有效的INVITE消息
+
+##### validate_response方法
+```python
+def validate_response(message: str) -> bool:
+```
+验证SIP响应消息格式
+- `message`: SIP消息字符串
+- 返回值: 是否为有效的SIP响应
+
+##### extract_call_id方法
+```python
+def extract_call_id(message: str) -> str:
+```
+从SIP消息中提取Call-ID
+- `message`: SIP消息字符串
+- 返回值: Call-ID值
+
+##### extract_cseq方法
+```python
+def extract_cseq(message: str) -> str:
+```
+从SIP消息中提取CSeq
+- `message`: SIP消息字符串
+- 返回值: CSeq值
+
+#### SIPTestScenario类
+
+##### 构造函数
+```python
+def __init__(self, name: str, description: str = "", config: Dict[str, Any] = None):
+```
+- `name`: 场景名称
+- `description`: 场景描述
+- `config`: 配置参数
+
+##### add_step方法
+```python
+def add_step(self, step: Dict[str, Any]):
+```
+添加测试步骤
+- `step`: 步骤定义字典
+
+##### execute方法
+```python
+def execute(self, config: Dict[str, Any]) -> Dict[str, Any]:
+```
+执行测试场景
+- `config`: 配置参数
+- 返回值: 执行结果字典
 
 ### 2.2 性能监控器 (monitor_client/performance_monitor.py)
 

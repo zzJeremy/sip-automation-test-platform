@@ -1,0 +1,35 @@
+{
+  "name": "sip-test-platform",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "@monaco-editor/loader": "^1.7.0",
+    "@vueuse/core": "^10.9.0",
+    "axios": "^1.13.2",
+    "echarts": "^5.6.0",
+    "element-plus": "^2.13.1",
+    "pinia": "^2.3.1",
+    "vue": "^3.4.29",
+    "vue-router": "^4.3.3",
+    "vuedraggable": "^2.24.3"
+  },
+  "devDependencies": {
+    "@rushstack/eslint-patch": "^1.8.0",
+    "@vitejs/plugin-legacy": "^5.3.1",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "@vitejs/plugin-vue-jsx": "^4.0.0",
+    "@vue/eslint-config-prettier": "^9.0.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-vue": "^9.23.0",
+    "monaco-editor": "^0.48.0",
+    "prettier": "^3.2.5",
+    "vite": "^5.3.1"
+  }
+}

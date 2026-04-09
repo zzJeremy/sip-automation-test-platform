@@ -5,8 +5,10 @@
 
 import logging
 import functools
+import traceback
 from typing import Callable, Any
 from datetime import datetime
+import json
 
 
 class SIPTestError(Exception):
@@ -34,10 +36,20 @@ class NetworkError(SIPTestError):
     pass
 
 
+class AuthenticationError(SIPTestError):
+    """认证相关错误"""
+    pass
+
+
+class SIPProtocolError(SIPTestError):
+    """SIP协议错误"""
+    pass
+
+
 def error_handler(func: Callable) -> Callable:
     """
     错误处理装饰器
-    捕获函数执行过程中的异常并记录日志
+    捕获函数执行过程中的异常并记录详细日志
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -45,20 +57,58 @@ def error_handler(func: Callable) -> Callable:
             return func(*args, **kwargs)
         except SIPTestError as e:
             logging.error(f"SIP测试错误在 {func.__name__}: {str(e)}")
+            logging.debug(f"函数 {func.__name__} 的详细堆栈信息: {traceback.format_exc()}")
             raise
         except Exception as e:
-            logging.error(f"未知错误在 {func.__name__}: {str(e)}")
+            error_msg = f"未知错误在 {func.__name__}: {str(e)}"
+            logging.error(error_msg)
+            logging.debug(f"函数 {func.__name__} 的详细堆栈信息: {traceback.format_exc()}")
             raise SIPTestError(f"函数 {func.__name__} 执行失败: {str(e)}")
     return wrapper
 
 
-def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
+def detailed_error_handler(func: Callable) -> Callable:
+    """
+    详细错误处理装饰器
+    捕获函数执行过程中的异常并记录更详细的日志
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except SIPTestError as e:
+            error_details = {
+                'function': func.__name__,
+                'exception_type': type(e).__name__,
+                'message': str(e),
+                'args': str(args)[:500],  # 截断长参数
+                'kwargs': str(kwargs)[:500],  # 截断长参数
+                'traceback': traceback.format_exc()
+            }
+            logging.error(f"SIP测试错误详情: {json.dumps(error_details, ensure_ascii=False, indent=2)}")
+            raise
+        except Exception as e:
+            error_details = {
+                'function': func.__name__,
+                'exception_type': type(e).__name__,
+                'message': str(e),
+                'args': str(args)[:500],
+                'kwargs': str(kwargs)[:500],
+                'traceback': traceback.format_exc()
+            }
+            logging.error(f"未知错误详情: {json.dumps(error_details, ensure_ascii=False, indent=2)}")
+            raise SIPTestError(f"函数 {func.__name__} 执行失败: {str(e)}")
+    return wrapper
+
+
+def retry_on_failure(max_retries: int = 3, delay: float = 1.0, exceptions_to_retry: tuple = (NetworkError, CallError)):
     """
     失败重试装饰器
     
     Args:
         max_retries: 最大重试次数
         delay: 重试间隔（秒）
+        exceptions_to_retry: 需要重试的异常类型元组
     """
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
@@ -68,7 +118,7 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
-                except (NetworkError, CallError) as e:
+                except exceptions_to_retry as e:
                     last_exception = e
                     if attempt < max_retries:
                         logging.warning(f"函数 {func.__name__} 第 {attempt + 1} 次尝试失败: {str(e)}，{delay}秒后重试...")
@@ -87,34 +137,36 @@ class SIPTestLogger:
     提供结构化的日志记录功能
     """
     
-    def __init__(self, name: str = "SIPTest", log_file: str = "sip_test.log"):
+    def __init__(self, name: str = "SIPTest", log_file: str = "sip_test.log", level: int = logging.INFO):
         """
         初始化日志记录器
         
         Args:
             name: 日志记录器名称
             log_file: 日志文件路径
+            level: 日志级别
         """
         self.logger = logging.getLogger(name)
-        self.logger.setLevel(logging.INFO)
+        self.logger.setLevel(level)
         
-        # 创建文件处理器
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
-        file_handler.setLevel(logging.INFO)
-        
-        # 创建控制台处理器
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        
-        # 创建格式化器
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        file_handler.setFormatter(formatter)
-        console_handler.setFormatter(formatter)
-        
-        # 添加处理器
+        # 避免重复添加处理器
         if not self.logger.handlers:
+            # 创建文件处理器
+            file_handler = logging.FileHandler(log_file, encoding='utf-8')
+            file_handler.setLevel(level)
+            
+            # 创建控制台处理器
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(level)
+            
+            # 创建格式化器 - 更详细的格式
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s() - %(message)s'
+            )
+            file_handler.setFormatter(formatter)
+            console_handler.setFormatter(formatter)
+            
+            # 添加处理器
             self.logger.addHandler(file_handler)
             self.logger.addHandler(console_handler)
     
@@ -135,7 +187,22 @@ class SIPTestLogger:
     
     def log_sip_message(self, direction: str, message: str):
         """记录SIP消息"""
-        self.logger.debug(f"SIP消息 {direction}: {message[:200]}...")  # 只记录前200个字符
+        self.logger.debug(f"SIP消息 {direction}: {message[:500]}...")  # 增加记录长度
+    
+    def log_protocol_violation(self, message: str, details: dict = None):
+        """记录协议违规"""
+        details_str = f" 详情: {details}" if details else ""
+        self.logger.warning(f"协议违规: {message}{details_str}")
+    
+    def log_performance_metric(self, metric_name: str, value: float, unit: str = ""):
+        """记录性能指标"""
+        unit_str = f" {unit}" if unit else ""
+        self.logger.info(f"性能指标: {metric_name} = {value}{unit_str}")
+    
+    def log_state_change(self, old_state: str, new_state: str, context: str = ""):
+        """记录状态变更"""
+        context_str = f" 上下文: {context}" if context else ""
+        self.logger.info(f"状态变更: {old_state} -> {new_state}{context_str}")
 
 
 def validate_sip_uri(uri: str) -> bool:
@@ -189,6 +256,7 @@ def create_test_summary(results: dict) -> dict:
     total = results.get('total', 0)
     passed = results.get('passed', 0)
     failed = results.get('failed', 0)
+    skipped = results.get('skipped', 0)
     
     success_rate = (passed / total * 100) if total > 0 else 0
     
@@ -196,11 +264,51 @@ def create_test_summary(results: dict) -> dict:
         'total_tests': total,
         'passed_tests': passed,
         'failed_tests': failed,
+        'skipped_tests': skipped,
         'success_rate': success_rate,
         'start_time': results.get('start_time'),
         'end_time': results.get('end_time'),
         'total_duration': (results['end_time'] - results['start_time']).total_seconds() if results.get('start_time') and results.get('end_time') else 0
     }
+
+
+def handle_network_error(error: Exception, operation: str = "network operation"):
+    """
+    专门处理网络错误
+    
+    Args:
+        error: 异常对象
+        operation: 操作描述
+    """
+    logging.error(f"网络错误在 {operation}: {str(error)}")
+    logging.debug(f"网络错误详细信息: {traceback.format_exc()}")
+    return NetworkError(f"{operation} 失败: {str(error)}")
+
+
+def handle_authentication_error(error: Exception, operation: str = "authentication"):
+    """
+    专门处理认证错误
+    
+    Args:
+        error: 异常对象
+        operation: 操作描述
+    """
+    logging.error(f"认证错误在 {operation}: {str(error)}")
+    logging.debug(f"认证错误详细信息: {traceback.format_exc()}")
+    return AuthenticationError(f"{operation} 失败: {str(error)}")
+
+
+def handle_protocol_error(error: Exception, operation: str = "protocol operation"):
+    """
+    专门处理协议错误
+    
+    Args:
+        error: 异常对象
+        operation: 操作描述
+    """
+    logging.error(f"协议错误在 {operation}: {str(error)}")
+    logging.debug(f"协议错误详细信息: {traceback.format_exc()}")
+    return SIPProtocolError(f"{operation} 失败: {str(error)}")
 
 
 # 为了与现有代码兼容，导入time模块

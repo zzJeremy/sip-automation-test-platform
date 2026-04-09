@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 import requests
 import json
 import re
+import hashlib
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -56,6 +57,10 @@ class SIPMessageBuilder:
         branch = branch or SIPMessageBuilder.generate_branch()
         from_tag = SIPMessageBuilder.generate_tag()
         
+        # 确保expires值在合理范围内 (RFC 3261规定0-99999999之间)
+        # 如果expires > 3600，一些服务器可能会拒绝请求
+        normalized_expires = min(max(expires, 0), 3600)
+        
         # 构建REGISTER请求
         message = (
             f"REGISTER sip:{domain} SIP/2.0\r\n"
@@ -67,7 +72,7 @@ class SIPMessageBuilder:
             f"Max-Forwards: 70\r\n"
             f"User-Agent: AutoTestForUG SIP Client 1.0\r\n"
             f"Contact: <sip:{username}@{local_host}:{local_port}>\r\n"
-            f"Expires: {expires}\r\n"
+            f"Expires: {normalized_expires}\r\n"
             f"Content-Length: 0\r\n"
             f"\r\n"
         )
@@ -115,16 +120,21 @@ class SIPMessageBuilder:
     
     @staticmethod
     def create_ack_message(caller_uri: str, callee_uri: str, call_id: str, local_host: str, 
-                          local_port: int, cseq: int = 1) -> str:
+                          local_port: int, cseq: int = 1, to_tag: str = None) -> str:
         """创建ACK请求消息"""
         branch = SIPMessageBuilder.generate_branch()
         from_tag = SIPMessageBuilder.generate_tag()
+        
+        # 构建To头，如果提供了to_tag则包含它
+        to_header = f"<{callee_uri}>"
+        if to_tag:
+            to_header += f";tag={to_tag}"
         
         message = (
             f"ACK {callee_uri} SIP/2.0\r\n"
             f"Via: SIP/2.0/UDP {local_host}:{local_port};branch={branch};rport\r\n"
             f"From: <{caller_uri}>;tag={from_tag}\r\n"
-            f"To: <{callee_uri}>\r\n"
+            f"To: {to_header}\r\n"
             f"Call-ID: {call_id}\r\n"
             f"CSeq: {cseq} ACK\r\n"
             f"Max-Forwards: 70\r\n"
@@ -347,6 +357,75 @@ class SIPMessageBuilder:
         return result
 
 
+class SIP482Handler:
+    """SIP 482错误处理增强类"""
+    def __init__(self):
+        # 存储活跃的Call-ID以避免重复
+        self.active_call_ids = set()
+        self.call_history = {}  # 存储呼叫历史以避免重复请求
+        
+        # 设置日志
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
+    
+    def generate_unique_call_params(self):
+        """生成唯一的呼叫参数以避免冲突"""
+        timestamp = int(time.time())
+        random_suffix = random.randint(100000, 999999)
+        
+        call_id = f"{timestamp}.{random_suffix}@{self.get_local_host()}"
+        branch = f"z9hG4bK{timestamp}{random_suffix}"
+        from_tag = f"tag{timestamp}{random_suffix}"
+        
+        return call_id, branch, from_tag
+    
+    def detect_loop_patterns(self, response):
+        """检测可能的循环模式"""
+        response_lower = response.lower()
+        if ('482' in response or 'loop' in response_lower or 
+            'merged' in response_lower or 'duplicate' in response_lower):
+            self.logger.warning("检测到可能的循环或合并请求模式")
+            return True
+        return False
+    
+    def handle_482_error(self, sock, caller_uri, callee_uri, original_params):
+        """处理482错误的特殊逻辑"""
+        self.logger.info("处理482错误 - 尝试使用新参数重新发送请求")
+        
+        # 生成新的唯一参数
+        new_call_id, new_branch, new_from_tag = self.generate_unique_call_params()
+        
+        # 检查新Call-ID是否已经存在
+        attempts = 0
+        while self.is_call_id_active(new_call_id) and attempts < 5:
+            new_call_id, new_branch, new_from_tag = self.generate_unique_call_params()
+            attempts += 1
+        
+        if attempts >= 5:
+            self.logger.error("无法生成唯一的Call-ID")
+            return False
+        
+        return {
+            'call_id': new_call_id,
+            'branch': new_branch,
+            'from_tag': new_from_tag
+        }
+    
+    def get_local_host(self):
+        """获取本地主机名"""
+        try:
+            return socket.gethostname()
+        except:
+            return "localhost"
+    
+    def is_call_id_active(self, call_id):
+        """检查Call-ID是否正在使用中"""
+        return call_id in self.active_call_ids
+
+
 class SIPTestClient:
     """
     SIP测试客户端类
@@ -395,6 +474,7 @@ class SIPTestClient:
         # 初始化测试状态
         self.active_calls = {}
         self.test_results = []
+        self.sip_482_handler = SIP482Handler()  # 初始化482错误处理器
         
         logging.info(f"SIP测试客户端初始化完成，服务器: {self.sip_server_host}:{self.sip_server_port}")
     
@@ -477,16 +557,77 @@ class SIPTestClient:
                     # 使用SIPMessageBuilder解析响应
                     parsed_response = SIPMessageBuilder.parse_response(response_str)
                     
+                    # 循环处理可能的多次认证挑战
+                    auth_attempts = 0
+                    max_auth_attempts = 3
+                    
+                    while parsed_response and parsed_response.get('status_code') in ['401', '407'] and auth_attempts < max_auth_attempts:
+                        reason = parsed_response.get('reason', 'Unknown')
+                        logging.info(f"服务器要求认证，返回: {parsed_response.get('status_code')} {reason} (认证尝试 {auth_attempts + 1})")
+                        
+                        # 获取认证挑战信息
+                        headers = parsed_response.get('headers', {})
+                        auth_header = headers.get('WWW-Authenticate') or headers.get('Proxy-Authenticate')
+                        
+                        if auth_header:
+                            logging.info(f"获取到认证挑战: {auth_header}")
+                            
+                            # 构造带认证信息的REGISTER请求
+                            authenticated_register_message = self._create_authenticated_register_message(
+                                username=username,
+                                password=password,
+                                domain=f"{self.sip_server_host}:{self.sip_server_port}",
+                                local_host=self.local_host,
+                                local_port=self.local_port,
+                                server_host=self.sip_server_host,
+                                server_port=self.sip_server_port,
+                                expires=expires,
+                                auth_header=auth_header
+                            )
+                            
+                            logging.info("发送带认证的REGISTER请求")
+                            logging.debug(f"认证REGISTER消息:\n{authenticated_register_message}")
+                            
+                            # 发送带认证的REGISTER请求
+                            sock.sendto(authenticated_register_message.encode('utf-8'), 
+                                       (self.sip_server_host, self.sip_server_port))
+                            
+                            # 等待认证后的响应
+                            try:
+                                response_data, server_addr = sock.recvfrom(4096)
+                                response_time = time.time() - start_time
+                                response_str = response_data.decode('utf-8')
+                                
+                                logging.info(f"收到认证后响应: {response_str[:200]}...")
+                                
+                                # 解析认证后的响应
+                                parsed_response = SIPMessageBuilder.parse_response(response_str)
+                                
+                                # 增加认证尝试次数
+                                auth_attempts += 1
+                                
+                            except socket.timeout:
+                                logging.error(f"认证请求超时 (认证尝试 {auth_attempts})")
+                                break
+                        else:
+                            logging.warning("服务器要求认证但未提供认证头信息")
+                            break
+                    
+                    # 检查最终结果
                     if parsed_response and parsed_response.get('status_code') == '200':
                         # 注册成功
                         logging.info(f"用户 {username} 注册成功")
+                        
+                        # 保存当前用户凭据，以便后续呼叫使用
+                        self.current_username = username
+                        self.current_password = password
                         
                         # 记录测试结果
                         result = {
                             "test_case": "REGISTRATION_TEST",
                             "timestamp": time.time(),
                             "result": "PASS",
-                            "details": f"用户 {username} 注册成功 (尝试 {attempt + 1})",
+                            "details": f"用户 {username} 注册成功 (尝试 {attempt + 1}, 认证尝试 {auth_attempts})",
                             "response_time": response_time
                         }
                         self.test_results.append(result)
@@ -494,20 +635,28 @@ class SIPTestClient:
                         sock.close()
                         return True
                     elif parsed_response and parsed_response.get('status_code') in ['401', '407']:
-                        # 需要认证
+                        # 即使经过多次认证尝试仍然失败
+                        status_code = parsed_response.get('status_code', 'Unknown')
                         reason = parsed_response.get('reason', 'Unknown')
-                        logging.warning(f"注册需要认证，服务器返回: {parsed_response.get('status_code')} {reason}")
-                        result = {
-                            "test_case": "REGISTRATION_TEST",
-                            "timestamp": time.time(),
-                            "result": "FAIL",
-                            "details": f"注册需要认证: {parsed_response.get('status_code')} {reason}",
-                            "response_time": response_time
-                        }
-                        self.test_results.append(result)
+                        logging.error(f"经过 {auth_attempts} 次认证尝试后仍然认证失败: {status_code} {reason}")
                         
-                        sock.close()
-                        return False
+                        # 如果不是最后一次总尝试，等待一段时间再重试
+                        if attempt < retries - 1:
+                            logging.info(f"注册失败，等待后重试... (尝试 {attempt + 1})")
+                            time.sleep(2 ** attempt)  # 指数退避
+                            continue
+                        else:
+                            result = {
+                                "test_case": "REGISTRATION_TEST",
+                                "timestamp": time.time(),
+                                "result": "FAIL",
+                                "details": f"经过多次认证尝试后仍然失败: {status_code} {reason}",
+                                "response_time": response_time
+                            }
+                            self.test_results.append(result)
+                            
+                            sock.close()
+                            return False
                     else:
                         # 其他错误
                         status_code = parsed_response.get('status_code', 'Unknown')
@@ -609,6 +758,312 @@ class SIPTestClient:
         self.test_results.append(result)
         return False
     
+    def _create_authenticated_register_message(self, username: str, password: str, domain: str, 
+                                              local_host: str, local_port: int, server_host: str, 
+                                              server_port: int, expires: int, auth_header: str) -> str:
+        """
+        创建带摘要认证的REGISTER消息
+        
+        Args:
+            username: 用户名
+            password: 密码
+            domain: 域
+            local_host: 本地主机
+            local_port: 本地端口
+            server_host: 服务器主机
+            server_port: 服务器端口
+            expires: 过期时间
+            auth_header: 认证头信息
+            
+        Returns:
+            str: 带认证的REGISTER消息
+        """
+        import re
+        
+        # 解析WWW-Authenticate头
+        # 例如: Digest realm="asterisk", nonce="1234567890", algorithm=MD5, qop="auth"
+        auth_params = {}
+        
+        # 提取认证参数
+        patterns = [
+            r'realm="([^"]+)"',
+            r'nonce="([^"]+)"',
+            r'opaque="([^"]*)"',  # 可选参数
+            r'algorithm=([A-Z0-9]+)',
+            r'qop="([^"]+)"'  # 质询选项
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, auth_header, re.IGNORECASE)
+            if match:
+                param_name = pattern.split('"')[0].split('=')[0].replace('r\'', '').replace('algorithm', 'algorithm').replace('realm', 'realm').replace('nonce', 'nonce').replace('opaque', 'opaque').replace('qop', 'qop')
+                if 'realm' in pattern:
+                    auth_params['realm'] = match.group(1)
+                elif 'nonce' in pattern:
+                    auth_params['nonce'] = match.group(1)
+                elif 'opaque' in pattern:
+                    auth_params['opaque'] = match.group(1) if match.group(1) else ''
+                elif 'algorithm' in pattern:
+                    auth_params['algorithm'] = match.group(1)
+                elif 'qop' in pattern:
+                    auth_params['qop'] = match.group(1)
+        
+        # 设置默认值
+        algorithm = auth_params.get('algorithm', 'MD5').upper()
+        realm = auth_params['realm']
+        nonce = auth_params['nonce']
+        qop = auth_params.get('qop', '')
+        
+        # 生成认证参数
+        call_id = SIPMessageBuilder.generate_call_id()
+        branch = SIPMessageBuilder.generate_branch()
+        from_tag = SIPMessageBuilder.generate_tag()
+        
+        # 计算认证响应值
+        # HA1 = MD5(username:realm:password)
+        ha1_input = f"{username}:{realm}:{password}"
+        ha1 = hashlib.md5(ha1_input.encode()).hexdigest()
+        
+        # 如果有qop，则使用较复杂的方法
+        if qop and qop.lower() == 'auth':
+            # HA2 = MD5(method:digestURI)
+            method = "REGISTER"
+            digest_uri = f"sip:{domain}"
+            ha2_input = f"{method}:{digest_uri}"
+            ha2 = hashlib.md5(ha2_input.encode()).hexdigest()
+            
+            # Response = MD5(HA1:nonce:nonceCount:cnonce:qop:HA2)
+            nc = "00000001"  # Nonce计数
+            cnonce = "12345678"  # 客户端随机数
+            response_input = f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}"
+        else:
+            # Response = MD5(HA1:nonce:HA2)
+            method = "REGISTER"
+            digest_uri = f"sip:{domain}"
+            ha2_input = f"{method}:{digest_uri}"
+            ha2 = hashlib.md5(ha2_input.encode()).hexdigest()
+            response_input = f"{ha1}:{nonce}:{ha2}"
+        
+        response = hashlib.md5(response_input.encode()).hexdigest()
+        
+        # 构建Authorization头
+        auth_parts = [
+            f'Digest username="{username}"',
+            f'realm="{realm}"',
+            f'nonce="{nonce}"',
+            f'uri="sip:{domain}"',
+            f'response="{response}"',
+            f'algorithm={algorithm}'
+        ]
+        
+        if auth_params.get('opaque'):
+            auth_parts.append(f'opaque="{auth_params["opaque"]}"')
+        
+        if qop:
+            auth_parts.extend([
+                f'qop={qop}',
+                f'cnonce="{cnonce}"',
+                f'nc={nc}'
+            ])
+        
+        authorization_header = ', '.join(auth_parts)
+        
+        # 确保expires值在合理范围内
+        normalized_expires = min(max(expires, 0), 3600)
+        
+        # 构建带认证的REGISTER请求
+        message = (
+            f"REGISTER sip:{domain} SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP {local_host}:{local_port};branch={branch};rport\r\n"
+            f"From: <sip:{username}@{domain}>;tag={from_tag}\r\n"
+            f"To: <sip:{username}@{domain}>\r\n"
+            f"Call-ID: {call_id}\r\n"
+            f"CSeq: 1 REGISTER\r\n"
+            f"Max-Forwards: 70\r\n"
+            f"User-Agent: AutoTestForUG SIP Client 1.0\r\n"
+            f"Contact: <sip:{username}@{local_host}:{local_port}>\r\n"
+            f"Authorization: {authorization_header}\r\n"
+            f"Expires: {normalized_expires}\r\n"
+            f"Content-Length: 0\r\n"
+            f"\r\n"
+        )
+        return message
+
+    def _create_authenticated_invite_message(self, caller_uri: str, callee_uri: str, local_host: str, 
+                                          local_port: int, server_host: str, server_port: int, 
+                                          call_id: str, auth_header: str, cseq: int = 1, auth_attempts: int = 1) -> str:
+        """
+        创建带摘要认证的INVITE消息
+        
+        Args:
+            caller_uri: 主叫URI
+            callee_uri: 被叫URI
+            local_host: 本地主机
+            local_port: 本地端口
+            server_host: 服务器主机
+            server_port: 服务器端口
+            call_id: 通话ID
+            auth_header: 认证头信息
+            cseq: CSeq值
+            auth_attempts: 认证尝试次数
+            
+        Returns:
+            str: 带认证的INVITE消息
+        """
+        import re
+        
+        # 从caller_uri中提取用户名
+        username = caller_uri.split('@')[0].replace('sip:', '')
+        domain = f"{server_host}:{server_port}"
+        
+        logging.info(f"创建带认证的INVITE消息: {username} -> {callee_uri}, 认证尝试次数: {auth_attempts}")
+        logging.debug(f"认证头信息: {auth_header}")
+        
+        # 解析WWW-Authenticate头
+        auth_params = {}
+        
+        # 提取认证参数
+        patterns = [
+            r'realm="([^"]+)"',
+            r'nonce="([^"]+)"',
+            r'opaque="([^"]*)"',  # 可选参数
+            r'algorithm=([A-Z0-9]+)',
+            r'qop="([^"]+)"'  # 质询选项
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, auth_header, re.IGNORECASE)
+            if match:
+                if 'realm' in pattern:
+                    auth_params['realm'] = match.group(1)
+                elif 'nonce' in pattern:
+                    auth_params['nonce'] = match.group(1)
+                elif 'opaque' in pattern:
+                    auth_params['opaque'] = match.group(1) if match.group(1) else ''
+                elif 'algorithm' in pattern:
+                    auth_params['algorithm'] = match.group(1)
+                elif 'qop' in pattern:
+                    auth_params['qop'] = match.group(1)
+        
+        logging.info(f"解析认证参数: realm='{auth_params.get('realm')}', nonce='{auth_params.get('nonce')}', algorithm='{auth_params.get('algorithm')}', qop='{auth_params.get('qop')}'")
+        
+        # 设置默认值
+        algorithm = auth_params.get('algorithm', 'MD5').upper()
+        realm = auth_params['realm']
+        nonce = auth_params['nonce']
+        qop = auth_params.get('qop', '')
+        
+        # 生成认证参数
+        branch = SIPMessageBuilder.generate_branch()
+        from_tag = SIPMessageBuilder.generate_tag()
+        
+        # 计算认证响应值
+        # HA1 = MD5(username:realm:password)
+        # 优先使用类属性中的密码，如果没有则使用配置文件中的密码
+        if hasattr(self, 'current_password') and self.current_password:
+            password = self.current_password
+        elif hasattr(self, 'password') and self.password:
+            password = self.password
+        else:
+            # 尝试从配置中获取密码作为最后备选
+            try:
+                import configparser
+                config = configparser.ConfigParser()
+                config.read(self.config_path)
+                password = config.get('TEST_CLIENT', 'password', fallback='1234')
+            except:
+                password = '1234'  # 默认密码
+        
+        logging.info(f"使用认证凭据: username='{username}', realm='{realm}', password='[HIDDEN]'")
+        
+        ha1_input = f"{username}:{realm}:{password}"
+        ha1 = hashlib.md5(ha1_input.encode()).hexdigest()
+        
+        # 如果有qop，则使用较复杂的方法
+        if qop and qop.lower() == 'auth':
+            # HA2 = MD5(method:digestURI)
+            method = "INVITE"
+            digest_uri = callee_uri
+            ha2_input = f"{method}:{digest_uri}"
+            ha2 = hashlib.md5(ha2_input.encode()).hexdigest()
+            
+            # Response = MD5(HA1:nonce:nonceCount:cnonce:qop:HA2)
+            # 使用认证尝试次数作为nonce计数，格式化为8位十六进制
+            nc = f"{auth_attempts:08x}"  # Nonce计数，如 00000001, 00000002 等
+            import random
+            cnonce = f"{random.randint(10000000, 99999999)}"  # 客户端随机数
+            response_input = f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}"
+            
+            logging.info(f"QOP=auth计算参数: HA1={ha1}, HA2={ha2}, nc={nc}, cnonce={cnonce}, qop={qop}")
+        else:
+            # Response = MD5(HA1:nonce:HA2)
+            method = "INVITE"
+            digest_uri = callee_uri
+            ha2_input = f"{method}:{digest_uri}"
+            ha2 = hashlib.md5(ha2_input.encode()).hexdigest()
+            response_input = f"{ha1}:{nonce}:{ha2}"
+            
+            logging.info(f"基本认证计算参数: HA1={ha1}, HA2={ha2}")
+        
+        response = hashlib.md5(response_input.encode()).hexdigest()
+        
+        logging.info(f"计算出的响应值: {response}")
+        
+        # 构建Authorization头
+        auth_parts = [
+            f'Digest username="{username}"',
+            f'realm="{realm}"',
+            f'nonce="{nonce}"',
+            f'uri="{callee_uri}"',
+            f'response="{response}"',
+            f'algorithm={algorithm}'
+        ]
+        
+        if auth_params.get('opaque'):
+            auth_parts.append(f'opaque="{auth_params["opaque"]}"')
+        
+        if qop:
+            auth_parts.extend([
+                f'qop={qop}',
+                f'cnonce="{cnonce}"',
+                f'nc={nc}'
+            ])
+        
+        authorization_header = ', '.join(auth_parts)
+        
+        # 基本SDP内容
+        sdp_content = (
+            "v=0\r\n"
+            "o=- {timestamp} {timestamp} IN IP4 {local_host}\r\n"
+            "s=AutoTestForUG Call\r\n"
+            "c=IN IP4 {local_host}\r\n"
+            "t=0 0\r\n"
+            "m=audio {local_port} RTP/AVP 0 8 101\r\n"
+            "a=rtpmap:0 PCMU/8000\r\n"
+            "a=rtpmap:8 PCMA/8000\r\n"
+            "a=rtpmap:101 telephone-event/8000\r\n"
+            "a=sendrecv\r\n"
+        ).format(timestamp=int(time.time()), local_host=local_host, local_port=local_port)
+        
+        # 构建带认证的INVITE请求
+        message = (
+            f"INVITE {callee_uri} SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP {local_host}:{local_port};branch={branch};rport\r\n"
+            f"From: <{caller_uri}>;tag={from_tag}\r\n"
+            f"To: <{callee_uri}>\r\n"
+            f"Call-ID: {call_id}\r\n"
+            f"CSeq: {cseq} INVITE\r\n"
+            f"Max-Forwards: 70\r\n"
+            f"User-Agent: AutoTestForUG SIP Client 1.0\r\n"
+            f"Contact: <{caller_uri}>\r\n"
+            f"Authorization: {authorization_header}\r\n"
+            f"Content-Type: application/sdp\r\n"
+            f"Content-Length: {len(sdp_content)}\r\n"
+            f"\r\n"
+            f"{sdp_content}"
+        )
+        return message
+    
     def make_call(self, caller_uri: str, callee_uri: str, duration: int = None) -> bool:
         """
         执行SIP呼叫
@@ -678,129 +1133,336 @@ class SIPTestClient:
             
             # 等待响应
             try:
-                # 首先等待180 Ringing响应
-                response_data, server_addr = sock.recvfrom(4096)
-                response_str = response_data.decode('utf-8')
-                logging.info(f"收到响应: {response_str[:100]}...")
+                # 循环处理临时响应（1xx），直到收到最终响应（2xx或错误响应）
+                final_response = None
+                provisional_responses = []  # 存储临时响应
                 
-                # 解析响应
-                parsed_response = SIPMessageBuilder.parse_response(response_str)
-                
-                if parsed_response and parsed_response.get('status_code') == '180':
-                    logging.info("收到180 Ringing响应")
-                    
-                    # 等待200 OK响应
+                # 首先接收可能的认证挑战或临时响应
+                while True:
                     response_data, server_addr = sock.recvfrom(4096)
                     response_str = response_data.decode('utf-8')
+                    logging.info(f"收到响应: {response_str[:100]}...")
+                    
+                    # 解析响应
                     parsed_response = SIPMessageBuilder.parse_response(response_str)
                     
-                    if parsed_response and parsed_response.get('status_code') == '200':
-                        logging.info("收到200 OK响应，建立通话")
+                    # 检查是否是认证挑战（401 Unauthorized 或 407 Proxy Authentication Required）
+                    if parsed_response and parsed_response.get('status_code') in ['401', '407']:
+                        logging.info(f"服务器要求认证，返回: {parsed_response.get('status_code')} {parsed_response.get('reason', '')}")
                         
-                        # 使用SIPMessageBuilder构造ACK消息
+                        # 根据SIPP脚本流程，发送ACK确认认证挑战响应
+                        # 获取响应中的To头信息，包括tag
+                        headers = parsed_response.get('headers', {})
+                        to_header = headers.get('To', '')
+                        to_tag_match = re.search(r';tag=([^\s;]+)', to_header)
+                        to_tag = to_tag_match.group(1) if to_tag_match else ''
+                        
+                        # 构造ACK消息确认认证挑战
                         ack_message = SIPMessageBuilder.create_ack_message(
                             caller_uri=caller_uri,
                             callee_uri=callee_uri,
                             call_id=call_id,
                             local_host=self.local_host,
                             local_port=self.local_port,
-                            cseq=1
+                            cseq=1,
+                            to_tag=to_tag
                         )
                         
-                        # 验证消息格式
-                        format_check = SIPMessageBuilder.validate_message_format(ack_message)
-                        if not format_check["is_valid"]:
-                            logging.warning(f"ACK消息格式验证失败: {format_check['errors']}")
-                        
-                        logging.info("发送ACK确认")
+                        logging.info("发送ACK确认认证挑战响应")
                         logging.debug(f"ACK消息:\n{ack_message}")
                         sock.sendto(ack_message.encode('utf-8'), (self.sip_server_host, self.sip_server_port))
                         
-                        # 保持通话一段时间
-                        logging.info(f"保持通话 {call_duration} 秒")
-                        time.sleep(call_duration)
+                        auth_attempts = 0
+                        max_auth_attempts = 3
                         
-                        # 使用SIPMessageBuilder构造BYE请求
-                        bye_message = SIPMessageBuilder.create_bye_message(
-                            caller_uri=caller_uri,
-                            callee_uri=callee_uri,
-                            call_id=call_id,
-                            local_host=self.local_host,
-                            local_port=self.local_port,
-                            cseq=2
-                        )
-                        
-                        # 验证消息格式
-                        format_check = SIPMessageBuilder.validate_message_format(bye_message)
-                        if not format_check["is_valid"]:
-                            logging.warning(f"BYE消息格式验证失败: {format_check['errors']}")
-                        
-                        logging.info("发送BYE请求结束通话")
-                        logging.debug(f"BYE消息:\n{bye_message}")
-                        sock.sendto(bye_message.encode('utf-8'), (self.sip_server_host, self.sip_server_port))
-                        
-                        # 等待BYE确认
-                        try:
-                            response_data, server_addr = sock.recvfrom(4096)
-                            response_str = response_data.decode('utf-8')
-                            parsed_response = SIPMessageBuilder.parse_response(response_str)
+                        # 循环处理可能的多次认证挑战
+                        while parsed_response and parsed_response.get('status_code') in ['401', '407'] and auth_attempts < max_auth_attempts:
+                            logging.info(f"服务器要求认证，返回: {parsed_response.get('status_code')} {parsed_response.get('reason', '')} (认证尝试 {auth_attempts + 1})")
                             
-                            if parsed_response and parsed_response.get('status_code') == '200':
-                                logging.info("收到200 OK确认，通话结束")
+                            # 获取认证挑战信息
+                            headers = parsed_response.get('headers', {})
+                            auth_header = headers.get('WWW-Authenticate') or headers.get('Proxy-Authenticate')
+                            
+                            if auth_header:
+                                logging.info(f"获取到认证挑战: {auth_header}")
+                                
+                                # 根据SIPP脚本，发送带认证信息的第二个INVITE请求
+                                # 注意：这里使用CSeq=2，因为第一个INVITE使用了CSeq=1
+                                invite_message_with_auth = self._create_authenticated_invite_message(
+                                    caller_uri=caller_uri,
+                                    callee_uri=callee_uri,
+                                    local_host=self.local_host,
+                                    local_port=self.local_port,
+                                    server_host=self.sip_server_host,
+                                    server_port=self.sip_server_port,
+                                    call_id=call_id,
+                                    auth_header=auth_header,
+                                    cseq=2,  # 第二次INVITE使用CSeq=2，符合SIPP脚本流程
+                                    auth_attempts=auth_attempts + 1
+                                )
+                                
+                                logging.info("发送带认证的INVITE请求（第二次）")
+                                logging.debug(f"认证INVITE消息:\n{invite_message_with_auth}")
+                                
+                                # 发送带认证的INVITE请求
+                                sock.sendto(invite_message_with_auth.encode('utf-8'), 
+                                           (self.sip_server_host, self.sip_server_port))
+                                
+                                # 等待认证后的响应
+                                try:
+                                    response_data, server_addr = sock.recvfrom(4096)
+                                    response_str = response_data.decode('utf-8')
+                                    logging.info(f"收到认证后响应: {response_str[:200]}...")
+                                    parsed_response = SIPMessageBuilder.parse_response(response_str)
+                                    
+                                    # 增加认证尝试次数
+                                    auth_attempts += 1
+                                    
+                                    # 如果认证成功，跳出认证循环
+                                    if parsed_response and parsed_response.get('status_code') not in ['401', '407']:
+                                        # 检查是否是最终的成功响应（2xx）或其他响应
+                                        if parsed_response.get('status_code').startswith('2'):
+                                            # 收到2xx响应，需要发送ACK确认
+                                            headers = parsed_response.get('headers', {})
+                                            to_header = headers.get('To', '')
+                                            to_tag_match = re.search(r';tag=([^\s;]+)', to_header)
+                                            to_tag = to_tag_match.group(1) if to_tag_match else ''
+                                            
+                                            # 发送ACK确认最终响应
+                                            final_ack_message = SIPMessageBuilder.create_ack_message(
+                                                caller_uri=caller_uri,
+                                                callee_uri=callee_uri,
+                                                call_id=call_id,
+                                                local_host=self.local_host,
+                                                local_port=self.local_port,
+                                                cseq=2,  # 使用与INVITE相同的CSeq值进行ACK
+                                                to_tag=to_tag
+                                            )
+                                            
+                                            logging.info("发送ACK确认最终响应")
+                                            logging.debug(f"最终ACK消息:\n{final_ack_message}")
+                                            sock.sendto(final_ack_message.encode('utf-8'), (self.sip_server_host, self.sip_server_port))
+                                        break
+                                except socket.timeout:
+                                    logging.error(f"认证请求超时 (认证尝试 {auth_attempts})")
+                                    break
                             else:
-                                status_code = parsed_response.get('status_code', 'Unknown')
-                                reason = parsed_response.get('reason', 'Unknown')
-                                logging.warning(f"BYE请求收到非200响应: {status_code} {reason}")
-                        except socket.timeout:
-                            logging.warning("BYE确认超时")
+                                logging.warning("服务器要求认证但未提供认证头信息")
+                                break
+                        # 认证处理完成后，继续处理其他响应
+                        continue  # 继续接收下一个响应
+                    elif parsed_response and parsed_response.get('status_code').startswith('1'):
+                        # 临时响应 (1xx)，如 100 Trying, 180 Ringing, 183 Session Progress
+                        logging.info(f"收到临时响应: {parsed_response.get('status_code')} {parsed_response.get('reason', '')}")
+                        provisional_responses.append(parsed_response)
                         
-                        # 更新呼叫状态
-                        self.active_calls[call_id]["status"] = "completed"
-                        self.active_calls[call_id]["end_time"] = time.time()
-                        response_time = time.time() - start_time
+                        if parsed_response.get('status_code') == '180':
+                            logging.info("收到180 Ringing响应")
                         
-                        # 记录测试结果
-                        result = {
-                            "test_case": "CALL_SETUP_TEST",
-                            "timestamp": time.time(),
-                            "result": "PASS",
-                            "details": f"呼叫 {caller_uri} -> {callee_uri} 成功完成",
-                            "response_time": response_time
-                        }
-                        self.test_results.append(result)
-                        
-                        sock.close()
-                        return True
+                        # 继续等待下一个响应
+                        continue
+                    elif parsed_response and parsed_response.get('status_code').startswith('2'):
+                        # 最终成功响应 (2xx)
+                        final_response = parsed_response
+                        logging.info(f"收到最终成功响应: {final_response.get('status_code')} {final_response.get('reason', '')}")
+                        break
                     else:
-                        status_code = parsed_response.get('status_code', 'Unknown')
-                        reason = parsed_response.get('reason', 'Unknown') if parsed_response else 'Unknown'
-                        logging.error(f"未收到200 OK响应，收到: {status_code} {reason}")
-                        result = {
-                            "test_case": "CALL_SETUP_TEST",
-                            "timestamp": time.time(),
-                            "result": "FAIL",
-                            "details": f"未收到200 OK响应: {status_code} {reason}",
-                            "response_time": time.time() - start_time
-                        }
-                        self.test_results.append(result)
+                        # 错误响应 (3xx-6xx)
+                        final_response = parsed_response
+                        logging.info(f"收到错误响应: {final_response.get('status_code')} {final_response.get('reason', '') if final_response else 'Unknown'}")
+                        break
+                
+                # 处理最终响应
+                if final_response and final_response.get('status_code') == '200':
+                    logging.info("收到200 OK响应，建立通话")
+                    
+                    # 从200 OK响应中提取To头的tag
+                    headers = final_response.get('headers', {})
+                    to_header = headers.get('To', '')
+                    to_tag_match = re.search(r';tag=([^\s;]+)', to_header)
+                    to_tag = to_tag_match.group(1) if to_tag_match else ''
+                    
+                    # 使用SIPMessageBuilder构造ACK消息
+                    # 如果这是对第二个INVITE（带认证的）的响应，则ACK的CSeq应该是2
+                    ack_message = SIPMessageBuilder.create_ack_message(
+                        caller_uri=caller_uri,
+                        callee_uri=callee_uri,
+                        call_id=call_id,
+                        local_host=self.local_host,
+                        local_port=self.local_port,
+                        cseq=2,  # 对应于第二个INVITE（带认证的）的CSeq
+                        to_tag=to_tag
+                    )
+                    
+                    # 验证消息格式
+                    format_check = SIPMessageBuilder.validate_message_format(ack_message)
+                    if not format_check["is_valid"]:
+                        logging.warning(f"ACK消息格式验证失败: {format_check['errors']}")
+                    
+                    logging.info("发送ACK确认")
+                    logging.debug(f"ACK消息:\n{ack_message}")
+                    sock.sendto(ack_message.encode('utf-8'), (self.sip_server_host, self.sip_server_port))
+                    
+                    # 保持通话一段时间
+                    logging.info(f"保持通话 {call_duration} 秒")
+                    time.sleep(call_duration)
+                    
+                    # 使用SIPMessageBuilder构造BYE请求
+                    # BYE的CSeq应该比对应的INVITE的CSeq大1
+                    bye_message = SIPMessageBuilder.create_bye_message(
+                        caller_uri=caller_uri,
+                        callee_uri=callee_uri,
+                        call_id=call_id,
+                        local_host=self.local_host,
+                        local_port=self.local_port,
+                        cseq=3  # BYE的CSeq应该比对应INVITE的CSeq大1（这里是2+1=3）
+                    )
+                    
+                    # 验证消息格式
+                    format_check = SIPMessageBuilder.validate_message_format(bye_message)
+                    if not format_check["is_valid"]:
+                        logging.warning(f"BYE消息格式验证失败: {format_check['errors']}")
+                    
+                    logging.info("发送BYE请求结束通话")
+                    logging.debug(f"BYE消息:\n{bye_message}")
+                    sock.sendto(bye_message.encode('utf-8'), (self.sip_server_host, self.sip_server_port))
+                    
+                    # 等待BYE确认
+                    try:
+                        response_data, server_addr = sock.recvfrom(4096)
+                        response_str = response_data.decode('utf-8')
+                        parsed_response = SIPMessageBuilder.parse_response(response_str)
                         
-                        sock.close()
-                        return False
-                else:
-                    status_code = parsed_response.get('status_code', 'Unknown') if parsed_response else 'Unknown'
-                    reason = parsed_response.get('reason', 'Unknown') if parsed_response else 'Unknown'
-                    logging.error(f"未收到180 Ringing响应，收到: {status_code} {reason}")
+                        if parsed_response and parsed_response.get('status_code') == '200':
+                            logging.info("收到200 OK确认，通话结束")
+                        else:
+                            status_code = parsed_response.get('status_code', 'Unknown')
+                            reason = parsed_response.get('reason', 'Unknown')
+                            logging.warning(f"BYE请求收到非200响应: {status_code} {reason}")
+                    except socket.timeout:
+                        logging.warning("BYE确认超时")
+                    
+                    # 更新呼叫状态
+                    self.active_calls[call_id]["status"] = "completed"
+                    self.active_calls[call_id]["end_time"] = time.time()
+                    response_time = time.time() - start_time
+                    
+                    # 记录测试结果
                     result = {
                         "test_case": "CALL_SETUP_TEST",
                         "timestamp": time.time(),
-                        "result": "FAIL",
-                        "details": f"未收到180 Ringing响应: {status_code} {reason}",
-                        "response_time": time.time() - start_time
+                        "result": "PASS",
+                        "details": f"呼叫 {caller_uri} -> {callee_uri} 成功完成 (临时响应: {[r.get('status_code') for r in provisional_responses]})",
+                        "response_time": response_time
                     }
                     self.test_results.append(result)
                     
                     sock.close()
+                    return True
+                else:
+                    # 未收到200 OK响应
+                    status_code = final_response.get('status_code', 'Unknown') if final_response else 'Unknown'
+                    reason = final_response.get('reason', 'Unknown') if final_response else 'Unknown'
+                    logging.error(f"未收到200 OK响应，收到: {status_code} {reason}")
+                    
+                    # 检查是否是482错误
+                    if status_code == '482':
+                        logging.warning("检测到482 Request Merged错误，尝试使用新参数重新发送请求")
+                        
+                        # 获取新参数并重试
+                        retry_params = self.sip_482_handler.handle_482_error(sock, caller_uri, callee_uri, {
+                            'call_id': call_id
+                        })
+                        
+                        if retry_params:
+                            # 使用新参数重新尝试呼叫
+                            logging.info(f"使用新参数重试呼叫: {retry_params['call_id']}")
+                            sock.close()  # 关闭旧套接字
+                            
+                            # 使用新参数重新调用呼叫方法
+                            return self._retry_call_with_new_params(
+                                caller_uri, callee_uri, call_duration, retry_params
+                            )
+                        else:
+                            logging.error("无法生成新参数，呼叫失败")
+                    
+                    # 检查是否是认证失败
+                    if status_code in ['401', '407']:
+                        result = {
+                            "test_case": "CALL_SETUP_TEST",
+                            "timestamp": time.time(),
+                            "result": "FAIL",
+                            "details": f"认证失败: {status_code} {reason}",
+                            "response_time": time.time() - start_time
+                        }
+                    else:
+                        result = {
+                            "test_case": "CALL_SETUP_TEST",
+                            "timestamp": time.time(),
+                            "result": "FAIL",
+                            "details": f"呼叫失败: {status_code} {reason}",
+                            "response_time": time.time() - start_time
+                        }
+                    self.test_results.append(result)
+                    
+                    sock.close()
                     return False
+                    
+                    # 保持通话一段时间
+                    logging.info(f"保持通话 {call_duration} 秒")
+                    time.sleep(call_duration)
+                    
+                    # 使用SIPMessageBuilder构造BYE请求
+                    bye_message = SIPMessageBuilder.create_bye_message(
+                        caller_uri=caller_uri,
+                        callee_uri=callee_uri,
+                        call_id=call_id,
+                        local_host=self.local_host,
+                        local_port=self.local_port,
+                        cseq=2
+                    )
+                    
+                    # 验证消息格式
+                    format_check = SIPMessageBuilder.validate_message_format(bye_message)
+                    if not format_check["is_valid"]:
+                        logging.warning(f"BYE消息格式验证失败: {format_check['errors']}")
+                    
+                    logging.info("发送BYE请求结束通话")
+                    logging.debug(f"BYE消息:\n{bye_message}")
+                    sock.sendto(bye_message.encode('utf-8'), (self.sip_server_host, self.sip_server_port))
+                    
+                    # 等待BYE确认
+                    try:
+                        response_data, server_addr = sock.recvfrom(4096)
+                        response_str = response_data.decode('utf-8')
+                        parsed_response = SIPMessageBuilder.parse_response(response_str)
+                        
+                        if parsed_response and parsed_response.get('status_code') == '200':
+                            logging.info("收到200 OK确认，通话结束")
+                        else:
+                            status_code = parsed_response.get('status_code', 'Unknown')
+                            reason = parsed_response.get('reason', 'Unknown')
+                            logging.warning(f"BYE请求收到非200响应: {status_code} {reason}")
+                    except socket.timeout:
+                        logging.warning("BYE确认超时")
+                    
+                    # 更新呼叫状态
+                    self.active_calls[call_id]["status"] = "completed"
+                    self.active_calls[call_id]["end_time"] = time.time()
+                    response_time = time.time() - start_time
+                    
+                    # 记录测试结果
+                    result = {
+                        "test_case": "CALL_SETUP_TEST",
+                        "timestamp": time.time(),
+                        "result": "PASS",
+                        "details": f"呼叫 {caller_uri} -> {callee_uri} 成功完成 (认证尝试 {auth_attempts})",
+                        "response_time": response_time
+                    }
+                    self.test_results.append(result)
+                    
+                    sock.close()
+                    return True
             except socket.timeout:
                 logging.error("呼叫请求超时")
                 result = {
@@ -822,6 +1484,305 @@ class SIPTestClient:
                 "timestamp": time.time(),
                 "result": "FAIL",
                 "details": f"呼叫失败: {str(e)}",
+                "response_time": 0
+            }
+            self.test_results.append(result)
+            return False
+    
+    def _retry_call_with_new_params(self, caller_uri: str, callee_uri: str, call_duration: int, retry_params: dict) -> bool:
+        """
+        使用新参数重试呼叫
+        
+        Args:
+            caller_uri: 主叫URI
+            callee_uri: 被叫URI
+            call_duration: 通话时长
+            retry_params: 重试参数，包含call_id, branch, from_tag
+            
+        Returns:
+            bool: 重试呼叫是否成功
+        """
+        try:
+            call_id = retry_params['call_id']
+            branch = retry_params['branch']
+            from_tag = retry_params['from_tag']
+            
+            logging.info(f"使用新参数重试呼叫: {caller_uri} -> {callee_uri}, 通话ID: {call_id}")
+            
+            # 创建UDP套接字
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(15)  # 15秒超时
+            
+            # 验证SIP URI格式
+            if not SIPMessageBuilder.validate_uri(caller_uri) or not SIPMessageBuilder.validate_uri(callee_uri):
+                logging.error(f"无效的SIP URI格式: {caller_uri} -> {callee_uri}")
+                result = {
+                    "test_case": "CALL_SETUP_TEST",
+                    "timestamp": time.time(),
+                    "result": "FAIL",
+                    "details": f"无效的SIP URI格式: {caller_uri} -> {callee_uri}",
+                    "response_time": 0
+                }
+                self.test_results.append(result)
+                return False
+            
+            # 使用SIPMessageBuilder构造带新参数的INVITE请求
+            # 这里需要手动构造包含新参数的INVITE消息
+            sdp_content = (
+                "v=0\r\n"
+                "o=- {timestamp} {timestamp} IN IP4 {local_host}\r\n"
+                "s=AutoTestForUG Call\r\n"
+                "c=IN IP4 {local_host}\r\n"
+                "t=0 0\r\n"
+                "m=audio {local_port} RTP/AVP 0 8 101\r\n"
+                "a=rtpmap:0 PCMU/8000\r\n"
+                "a=rtpmap:8 PCMA/8000\r\n"
+                "a=rtpmap:101 telephone-event/8000\r\n"
+                "a=sendrecv\r\n"
+            ).format(timestamp=int(time.time()), local_host=self.local_host, local_port=self.local_port)
+            
+            invite_message = (
+                f"INVITE {callee_uri} SIP/2.0\r\n"
+                f"Via: SIP/2.0/UDP {self.local_host}:{self.local_port};branch={branch};rport\r\n"
+                f"From: <{caller_uri}>;tag={from_tag}\r\n"
+                f"To: <{callee_uri}>\r\n"
+                f"Call-ID: {call_id}\r\n"
+                f"CSeq: 1 INVITE\r\n"
+                f"Max-Forwards: 70\r\n"
+                f"User-Agent: AutoTestForUG SIP Client 1.0\r\n"
+                f"Contact: <{caller_uri}>\r\n"
+                f"Content-Type: application/sdp\r\n"
+                f"Content-Length: {len(sdp_content)}\r\n"
+                f"\r\n"
+                f"{sdp_content}"
+            )
+            
+            start_time = time.time()
+            logging.info(f"发送带新参数的INVITE请求到 {self.sip_server_host}:{self.sip_server_port}")
+            logging.debug(f"INVITE消息:\n{invite_message}")
+            
+            # 发送INVITE请求
+            sock.sendto(invite_message.encode('utf-8'), (self.sip_server_host, self.sip_server_port))
+            
+            # 等待响应
+            try:
+                # 循环处理临时响应（1xx），直到收到最终响应（2xx或错误响应）
+                final_response = None
+                provisional_responses = []  # 存储临时响应
+                
+                # 首先接收可能的认证挑战或临时响应
+                while True:
+                    response_data, server_addr = sock.recvfrom(4096)
+                    response_str = response_data.decode('utf-8')
+                    logging.info(f"收到响应: {response_str[:100]}...")
+                    
+                    # 解析响应
+                    parsed_response = SIPMessageBuilder.parse_response(response_str)
+                    
+                    # 检查是否是认证挑战（401 Unauthorized 或 407 Proxy Authentication Required）
+                    if parsed_response and parsed_response.get('status_code') in ['401', '407']:
+                        auth_attempts = 0
+                        max_auth_attempts = 3
+                        
+                        # 循环处理可能的多次认证挑战
+                        while parsed_response and parsed_response.get('status_code') in ['401', '407'] and auth_attempts < max_auth_attempts:
+                            logging.info(f"服务器要求认证，返回: {parsed_response.get('status_code')} {parsed_response.get('reason', '')} (认证尝试 {auth_attempts + 1})")
+                            
+                            # 获取认证挑战信息
+                            headers = parsed_response.get('headers', {})
+                            auth_header = headers.get('WWW-Authenticate') or headers.get('Proxy-Authenticate')
+                            
+                            if auth_header:
+                                logging.info(f"获取到认证挑战: {auth_header}")
+                                
+                                # 重新发送带认证的INVITE请求
+                                invite_message_with_auth = self._create_authenticated_invite_message(
+                                    caller_uri=caller_uri,
+                                    callee_uri=callee_uri,
+                                    local_host=self.local_host,
+                                    local_port=self.local_port,
+                                    server_host=self.sip_server_host,
+                                    server_port=self.sip_server_port,
+                                    call_id=call_id,
+                                    auth_header=auth_header,
+                                    cseq=1,  # INVITE的CSeq
+                                    auth_attempts=auth_attempts + 1  # 认证尝试次数，+1是因为我们要计算下一次尝试
+                                )
+                                
+                                logging.info("发送带认证的INVITE请求")
+                                logging.debug(f"认证INVITE消息:\n{invite_message_with_auth}")
+                                
+                                # 发送带认证的INVITE请求
+                                sock.sendto(invite_message_with_auth.encode('utf-8'), 
+                                           (self.sip_server_host, self.sip_server_port))
+                                
+                                # 等待认证后的响应
+                                try:
+                                    response_data, server_addr = sock.recvfrom(4096)
+                                    response_str = response_data.decode('utf-8')
+                                    logging.info(f"收到认证响应: {response_str[:200]}...")
+                                    parsed_response = SIPMessageBuilder.parse_response(response_str)
+                                    
+                                    # 增加认证尝试次数
+                                    auth_attempts += 1
+                                    
+                                    # 如果认证成功，跳出认证循环
+                                    if parsed_response and parsed_response.get('status_code') not in ['401', '407']:
+                                        break
+                                except socket.timeout:
+                                    logging.error(f"认证请求超时 (认证尝试 {auth_attempts})")
+                                    break
+                            else:
+                                logging.warning("服务器要求认证但未提供认证头信息")
+                                break
+                        # 认证处理完成后，继续处理其他响应
+                        continue  # 继续接收下一个响应
+                    elif parsed_response and parsed_response.get('status_code').startswith('1'):
+                        # 临时响应 (1xx)，如 100 Trying, 180 Ringing, 183 Session Progress
+                        logging.info(f"收到临时响应: {parsed_response.get('status_code')} {parsed_response.get('reason', '')}")
+                        provisional_responses.append(parsed_response)
+                        
+                        if parsed_response.get('status_code') == '180':
+                            logging.info("收到180 Ringing响应")
+                        
+                        # 继续等待下一个响应
+                        continue
+                    elif parsed_response and parsed_response.get('status_code').startswith('2'):
+                        # 最终成功响应 (2xx)
+                        final_response = parsed_response
+                        logging.info(f"收到最终成功响应: {final_response.get('status_code')} {final_response.get('reason', '')}")
+                        break
+                    else:
+                        # 错误响应 (3xx-6xx)
+                        final_response = parsed_response
+                        logging.info(f"收到错误响应: {final_response.get('status_code')} {final_response.get('reason', '') if final_response else 'Unknown'}")
+                        break
+                
+                # 处理最终响应
+                if final_response and final_response.get('status_code') == '200':
+                    logging.info("收到200 OK响应，建立通话")
+                    
+                    # 使用SIPMessageBuilder构造ACK消息
+                    ack_message = SIPMessageBuilder.create_ack_message(
+                        caller_uri=caller_uri,
+                        callee_uri=callee_uri,
+                        call_id=call_id,
+                        local_host=self.local_host,
+                        local_port=self.local_port,
+                        cseq=1
+                    )
+                    
+                    # 验证消息格式
+                    format_check = SIPMessageBuilder.validate_message_format(ack_message)
+                    if not format_check["is_valid"]:
+                        logging.warning(f"ACK消息格式验证失败: {format_check['errors']}")
+                    
+                    logging.info("发送ACK确认")
+                    logging.debug(f"ACK消息:\n{ack_message}")
+                    sock.sendto(ack_message.encode('utf-8'), (self.sip_server_host, self.sip_server_port))
+                    
+                    # 保持通话一段时间
+                    logging.info(f"保持通话 {call_duration} 秒")
+                    time.sleep(call_duration)
+                    
+                    # 使用SIPMessageBuilder构造BYE请求
+                    bye_message = SIPMessageBuilder.create_bye_message(
+                        caller_uri=caller_uri,
+                        callee_uri=callee_uri,
+                        call_id=call_id,
+                        local_host=self.local_host,
+                        local_port=self.local_port,
+                        cseq=2
+                    )
+                    
+                    # 验证消息格式
+                    format_check = SIPMessageBuilder.validate_message_format(bye_message)
+                    if not format_check["is_valid"]:
+                        logging.warning(f"BYE消息格式验证失败: {format_check['errors']}")
+                    
+                    logging.info("发送BYE请求结束通话")
+                    logging.debug(f"BYE消息:\n{bye_message}")
+                    sock.sendto(bye_message.encode('utf-8'), (self.sip_server_host, self.sip_server_port))
+                    
+                    # 等待BYE确认
+                    try:
+                        response_data, server_addr = sock.recvfrom(4096)
+                        response_str = response_data.decode('utf-8')
+                        parsed_response = SIPMessageBuilder.parse_response(response_str)
+                        
+                        if parsed_response and parsed_response.get('status_code') == '200':
+                            logging.info("收到200 OK确认，通话结束")
+                        else:
+                            status_code = parsed_response.get('status_code', 'Unknown')
+                            reason = parsed_response.get('reason', 'Unknown')
+                            logging.warning(f"BYE请求收到非200响应: {status_code} {reason}")
+                    except socket.timeout:
+                        logging.warning("BYE确认超时")
+                    
+                    # 更新呼叫状态
+                    self.active_calls[call_id]["status"] = "completed"
+                    self.active_calls[call_id]["end_time"] = time.time()
+                    response_time = time.time() - start_time
+                    
+                    # 记录测试结果
+                    result = {
+                        "test_case": "CALL_SETUP_TEST",
+                        "timestamp": time.time(),
+                        "result": "PASS",
+                        "details": f"重试呼叫 {caller_uri} -> {callee_uri} 成功完成 (临时响应: {[r.get('status_code') for r in provisional_responses]})",
+                        "response_time": response_time
+                    }
+                    self.test_results.append(result)
+                    
+                    sock.close()
+                    return True
+                else:
+                    # 未收到200 OK响应
+                    status_code = final_response.get('status_code', 'Unknown') if final_response else 'Unknown'
+                    reason = final_response.get('reason', 'Unknown') if final_response else 'Unknown'
+                    logging.error(f"重试呼叫未收到200 OK响应，收到: {status_code} {reason}")
+                    
+                    # 检查是否是认证失败
+                    if status_code in ['401', '407']:
+                        result = {
+                            "test_case": "CALL_SETUP_TEST",
+                            "timestamp": time.time(),
+                            "result": "FAIL",
+                            "details": f"重试呼叫认证失败: {status_code} {reason}",
+                            "response_time": time.time() - start_time
+                        }
+                    else:
+                        result = {
+                            "test_case": "CALL_SETUP_TEST",
+                            "timestamp": time.time(),
+                            "result": "FAIL",
+                            "details": f"重试呼叫失败: {status_code} {reason}",
+                            "response_time": time.time() - start_time
+                        }
+                    self.test_results.append(result)
+                    
+                    sock.close()
+                    return False
+            except socket.timeout:
+                logging.error("重试呼叫请求超时")
+                result = {
+                    "test_case": "CALL_SETUP_TEST",
+                    "timestamp": time.time(),
+                    "result": "FAIL",
+                    "details": "重试呼叫请求超时",
+                    "response_time": time.time() - start_time
+                }
+                self.test_results.append(result)
+                
+                sock.close()
+                return False
+        except Exception as e:
+            logging.error(f"重试呼叫 {caller_uri} -> {callee_uri} 失败: {str(e)}")
+            result = {
+                "test_case": "CALL_SETUP_TEST",
+                "timestamp": time.time(),
+                "result": "FAIL",
+                "details": f"重试呼叫失败: {str(e)}",
                 "response_time": 0
             }
             self.test_results.append(result)
@@ -1952,8 +2913,10 @@ class SIPTestClient:
                     body_start = i + 1
                     break
                 if ':' in line:
-                    header_name, header_value = line.split(':', 1)
-                    parsed_message["headers"][header_name.strip().lower()] = header_value.strip()
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        header_name, header_value = parts
+                        parsed_message["headers"][header_name.strip().lower()] = header_value.strip() if header_value is not None else ""
             
             # 解析消息体
             if body_start != -1 and body_start < len(lines):

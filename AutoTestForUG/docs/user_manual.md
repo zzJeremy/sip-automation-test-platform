@@ -22,9 +22,33 @@ pip install -r requirements.txt
 - config/config.ini：系统参数配置
 - config/test_cases.ini：测试用例配置
 
-## 3. 配置说明
+## 3. 快速开始
 
-### 3.1 config.ini配置文件
+### 3.1 运行基本测试
+```bash
+python main.py --test-type call
+```
+
+### 3.2 运行特定测试类型
+支持的测试类型包括：
+- `register`：注册测试
+- `call`：呼叫测试
+- `message`：SIP消息测试
+- `monitor`：性能监控
+- `exception`：异常测试
+- `all`：全部测试
+- `business`：业务测试
+- `conference`：会议呼叫测试
+- `web` 或 `web_interface`：启动Web界面
+
+### 3.3 启动Web界面
+```bash
+python main.py --test-type web
+```
+
+## 4. 配置说明
+
+### 4.1 config.ini配置文件
 
 #### [SIP]部分
 - `server_host`：SIP服务器地址
@@ -42,12 +66,80 @@ pip install -r requirements.txt
 - `test_duration`：测试持续时间（秒）
 - `call_duration`：单次通话持续时间（秒）
 
-### 3.2 test_cases.ini配置文件
+#### [LOGGING]部分
+- `log_level`：日志级别（DEBUG/INFO/WARNING/ERROR）
+- `log_format`：日志格式
+- `log_file`：日志文件路径
+
+### 4.2 test_cases.ini配置文件
 
 定义各种测试用例，包括：
 - 测试用例ID
 - 测试类型（注册、呼叫、消息等）
 - 测试参数
+
+## 5. 高级功能
+
+### 5.1 业务测试套件
+使用BusinessTestSuite创建复杂的业务测试场景：
+```python
+from business_layer.business_test_suite import BusinessTestSuite, BusinessTestSuiteFactory
+
+# 创建业务测试套件
+suite = BusinessTestSuiteFactory.create_basic_sip_suite("My Test Suite")
+
+# 添加测试场景并执行
+result = suite.execute_suite(config)
+```
+
+### 5.2 SIP DSL（领域特定语言）
+使用SIP DSL定义简单的测试场景：
+```python
+from core.pytest_integration.sip_dsl import SIPCallFlow
+
+# 定义呼叫流程
+call_flow = SIPCallFlow("sip:alice@domain.com", "sip:bob@domain.com")
+call_flow.make_call(10).wait_for_ringing().wait_for_answer().wait(5).terminate_call()
+```
+
+### 5.3 Pytest集成
+项目完全集成pytest框架，支持：
+- fixtures管理测试资源
+- 并行测试执行
+- 详细的测试报告
+- 参数化测试
+
+### 5.4 多客户端支持
+系统支持多种SIP客户端实现：
+- Socket客户端：轻量级实现
+- PJSIP客户端：功能完整的SIP栈
+- SIPp控制器：外部SIPp工具集成
+- Asterisk客户端：高级业务功能
+
+## 6. Web界面使用
+
+启动Web服务后，在浏览器访问 http://localhost:5000 查看测试界面。
+Web界面提供：
+- 测试配置管理
+- 测试执行控制
+- 实时测试结果显示
+- 历史测试报告查看
+
+## 7. 报告和日志
+
+### 7.1 测试报告
+系统生成多种格式的测试报告：
+- JSON格式：便于程序处理
+- HTML格式：便于查看
+- CSV格式：便于数据分析
+- TXT格式：便于存档
+
+### 7.2 日志系统
+完整的日志记录功能，包括：
+- 操作日志
+- 错误日志
+- 性能指标日志
+- 通信消息日志
 - 预期结果
 
 ## 4. 使用方法
