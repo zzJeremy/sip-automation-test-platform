@@ -3,6 +3,7 @@
 统一的报告生成接口
 """
 import logging
+import asyncio
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from datetime import datetime
@@ -278,3 +279,72 @@ class ReportGenerator:
             return output.getvalue()
         else:
             raise ValueError(f"不支持的导出格式: {format_type}")
+    
+    async def generate_report_async(self, test_results: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        异步生成测试报告（多种格式）
+        
+        Args:
+            test_results: 测试结果
+            
+        Returns:
+            Dict: 报告生成结果
+        """
+        self.logger.info("开始异步生成测试报告")
+        
+        # 使用线程池执行阻塞操作
+        result = await asyncio.to_thread(self.generate_report, test_results)
+        
+        self.logger.info("异步测试报告生成完成")
+        return result
+    
+    async def generate_summary_report_async(self, test_results_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        异步生成多套测试结果的汇总报告
+        
+        Args:
+            test_results_list: 测试结果列表
+            
+        Returns:
+            Dict: 汇总报告
+        """
+        self.logger.info(f"开始异步生成 {len(test_results_list)} 个测试结果的汇总报告")
+        
+        # 使用线程池执行阻塞操作
+        result = await asyncio.to_thread(self.generate_summary_report, test_results_list)
+        
+        self.logger.info("异步汇总报告生成完成")
+        return result
+    
+    async def generate_pytest_report_async(self, pytest_args: list = None) -> Dict[str, Any]:
+        """
+        异步生成pytest报告
+        
+        Args:
+            pytest_args: pytest参数
+            
+        Returns:
+            Dict: 报告生成结果
+        """
+        self.logger.info("开始异步生成pytest报告")
+        
+        # 使用线程池执行阻塞操作
+        result = await asyncio.to_thread(self.generate_pytest_report, pytest_args)
+        
+        self.logger.info("异步pytest报告生成完成")
+        return result
+    
+    async def export_report_data_async(self, test_results: Dict[str, Any], format_type: str = "json") -> str:
+        """
+        异步导出测试报告数据，用于外部系统集成
+        
+        Args:
+            test_results: 测试结果
+            format_type: 导出格式
+            
+        Returns:
+            str: 导出的数据内容
+        """
+        # 使用线程池执行阻塞操作
+        result = await asyncio.to_thread(self.export_report_data, test_results, format_type)
+        return result

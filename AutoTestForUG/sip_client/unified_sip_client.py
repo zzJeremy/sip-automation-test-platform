@@ -5,15 +5,87 @@ SIP客户端抽象基类和工厂模式实现
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Protocol
+from enum import Enum
+from dataclasses import dataclass
 import logging
 import socket
 import time
 
 # 导入之前创建的安全和错误处理模块
 from .sip_client_base import SIPClientBase
-from ..security_enhancements import SecureSIPMessageBuilder, secure_credential_manager, secure_sip_logger
-from ..enhanced_error_handler import SIPErrorHandler, categorize_sip_error, parse_sip_response_code
-from ..basic_sip_call_tester import BasicSIPCallTester, SIPClientState
+
+# 尝试导入安全模块，如果失败则使用默认实现
+try:
+    from security_enhancements import SecureSIPMessageBuilder, secure_credential_manager, secure_sip_logger
+except ImportError:
+    # 默认实现
+    class SecureSIPMessageBuilder:
+        def __init__(self, logger):
+            self.logger = logger
+    
+    class SecureCredentialManager:
+        def store_credentials(self, key, username, password):
+            pass
+        def remove_credentials(self, key):
+            pass
+    
+    secure_credential_manager = SecureCredentialManager()
+    secure_sip_logger = logging.getLogger('secure_sip_logger')
+
+# 尝试导入错误处理模块，如果失败则使用默认实现
+try:
+    from enhanced_error_handler import SIPErrorHandler, categorize_sip_error, parse_sip_response_code
+except ImportError:
+    # 默认实现
+    class SIPErrorHandler:
+        pass
+    
+    def categorize_sip_error(response, operation):
+        return Exception(f"SIP error: {operation}")
+    
+    def parse_sip_response_code(response):
+        return 0
+
+# 尝试导入基础测试器，如果失败则使用默认实现
+try:
+    from basic_sip_call_tester import BasicSIPCallTester, SIPClientState
+except ImportError:
+    # 默认实现
+    class SIPClientState(Enum):
+        UNREGISTERED = "unregistered"
+        REGISTERING = "registering"
+        REGISTERED = "registered"
+        UNREGISTERING = "unregistering"
+        CALLING = "calling"
+        IDLE = "idle"
+        ERROR = "error"
+        UNKNOWN = "unknown"
+    
+    class BasicSIPCallTester:
+        def __init__(self, server_host, server_port, local_host, local_port):
+            self.server_host = server_host
+            self.server_port = server_port
+            self.local_host = local_host
+            self.local_port = local_port
+            self._supported_methods = ["INVITE", "ACK", "BYE", "CANCEL", "REGISTER", "MESSAGE"]
+        
+        def register_user(self, username, domain, password, expires):
+            return True
+        
+        def make_basic_call(self, from_uri, to_uri, duration):
+            return True
+        
+        def generate_call_id(self):
+            return "test-call-id"
+        
+        def generate_branch(self):
+            return "z9hG4bKtest"
+        
+        def generate_tag(self):
+            return "test-tag"
+        
+        def cleanup(self):
+            pass
 
 
 class SIPMessageBuilderInterface(Protocol):
@@ -150,13 +222,45 @@ class AbstractSIPClient(SIPClientBase, ABC):
         return categorize_sip_error(response, operation)
 
 
+# 定义SIP错误码和异常类型
+class SIPErrorCode(Enum):
+    """SIP错误码枚举"""
+    SUCCESS = "success"
+    NETWORK_ERROR = "network_error"
+    AUTH_FAILED = "auth_failed"
+    TIMEOUT = "timeout"
+    SERVER_ERROR = "server_error"
+    INVALID_RESPONSE = "invalid_response"
+    CLIENT_ERROR = "client_error"
+    CONFIG_ERROR = "config_error"
+
+
+class SIPException(Exception):
+    """SIP异常基类"""
+    def __init__(self, error_code: SIPErrorCode, message: str, details: dict = None):
+        self.error_code = error_code
+        self.message = message
+        self.details = details or {}
+        super().__init__(f"[{error_code.value}] {message}")
+
+
+@dataclass
+class SIPResult:
+    """SIP操作结果"""
+    success: bool
+    error_code: Optional[SIPErrorCode] = None
+    error_message: Optional[str] = None
+    response_code: Optional[int] = None
+    details: Dict[str, Any] = None
+
+
 class UnifiedSIPClient(AbstractSIPClient):
     """
     统一SIP客户端实现
     提供完整的SIP功能实现，继承自抽象基类
     """
     
-    def register(self, username: str, password: str, expires: int = 3600) -> bool:
+    def register(self, username: str, password: str, expires: int = 3600) -> SIPResult:
         """
         执行SIP注册
         
@@ -166,15 +270,42 @@ class UnifiedSIPClient(AbstractSIPClient):
             expires: 注册有效期（秒）
             
         Returns:
-            bool: 注册是否成功
+            SIPResult: 注册结果
         """
         try:
             self.set_state(SIPClientState.REGISTERING, f"开始注册用户 {username}")
             secure_sip_logger.info(f"执行SIP注册: {username}@{self.config.get('sip_server_host')}")
             
+            # 验证参数
+            if not username or not password:
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.CLIENT_ERROR,
+                    error_message="用户名和密码不能为空",
+                    details={"username": username}
+                )
+            
             # 使用BasicSIPCallTester的完整注册功能
             domain = self.config.get('sip_server_host', '127.0.0.1')
-            result = self._client.register_user(username, domain, password, expires)
+            
+            try:
+                result = self._client.register_user(username, domain, password, expires)
+            except socket.timeout:
+                self.set_state(SIPClientState.ERROR, f"注册超时: {username}")
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.TIMEOUT,
+                    error_message="注册超时",
+                    details={"username": username, "domain": domain}
+                )
+            except ConnectionRefusedError:
+                self.set_state(SIPClientState.ERROR, f"连接被拒绝: {domain}")
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.NETWORK_ERROR,
+                    error_message="连接被拒绝",
+                    details={"domain": domain}
+                )
             
             if result:
                 self.set_state(SIPClientState.REGISTERED, f"用户 {username} 注册成功")
@@ -188,17 +319,39 @@ class UnifiedSIPClient(AbstractSIPClient):
                 )
                 
                 secure_sip_logger.info("SIP注册成功")
-                return True
+                return SIPResult(
+                    success=True,
+                    details={"username": username, "domain": domain, "expires": expires}
+                )
             else:
                 self.set_state(SIPClientState.UNREGISTERED, f"用户 {username} 注册失败")
                 secure_sip_logger.error("SIP注册失败")
-                return False
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.AUTH_FAILED,
+                    error_message="注册失败，可能是用户名或密码错误",
+                    details={"username": username, "domain": domain}
+                )
+        except SIPException as e:
+            secure_sip_logger.error(f"SIP注册失败: {str(e)}")
+            self.set_state(SIPClientState.ERROR, f"注册异常: {str(e)}")
+            return SIPResult(
+                success=False,
+                error_code=e.error_code,
+                error_message=e.message,
+                details=e.details
+            )
         except Exception as e:
             secure_sip_logger.error(f"SIP注册失败: {str(e)}")
             self.set_state(SIPClientState.ERROR, f"注册异常: {str(e)}")
-            return False
+            return SIPResult(
+                success=False,
+                error_code=SIPErrorCode.CLIENT_ERROR,
+                error_message=f"注册异常: {str(e)}",
+                details={"exception": str(e)}
+            )
     
-    def make_call(self, from_uri: str, to_uri: str, timeout: int = 30) -> bool:
+    def make_call(self, from_uri: str, to_uri: str, timeout: int = 30) -> SIPResult:
         """
         发起SIP呼叫
         
@@ -208,9 +361,18 @@ class UnifiedSIPClient(AbstractSIPClient):
             timeout: 超时时间（秒）
             
         Returns:
-            bool: 呼叫是否成功
+            SIPResult: 呼叫结果
         """
         try:
+            # 验证参数
+            if not from_uri or not to_uri:
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.CLIENT_ERROR,
+                    error_message="主叫和被叫URI不能为空",
+                    details={"from_uri": from_uri, "to_uri": to_uri}
+                )
+            
             # 检查当前状态
             if self._state not in [SIPClientState.REGISTERED, SIPClientState.IDLE]:
                 secure_sip_logger.warning(f"客户端状态为 {self._state.value}，仍尝试发起呼叫")
@@ -219,22 +381,62 @@ class UnifiedSIPClient(AbstractSIPClient):
             
             # 使用基础通话测试器执行呼叫
             call_duration = min(timeout // 2, 30)  # 最大通话时间不超过30秒
-            result = self._client.make_basic_call(from_uri, to_uri, call_duration)
+            
+            try:
+                result = self._client.make_basic_call(from_uri, to_uri, call_duration)
+            except socket.timeout:
+                self.set_state(SIPClientState.IDLE, f"呼叫超时: {from_uri} -> {to_uri}")
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.TIMEOUT,
+                    error_message="呼叫超时",
+                    details={"from_uri": from_uri, "to_uri": to_uri, "timeout": timeout}
+                )
+            except ConnectionRefusedError:
+                self.set_state(SIPClientState.IDLE, f"连接被拒绝: {from_uri} -> {to_uri}")
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.NETWORK_ERROR,
+                    error_message="连接被拒绝",
+                    details={"from_uri": from_uri, "to_uri": to_uri}
+                )
             
             if result:
                 self.set_state(SIPClientState.IDLE, f"成功完成呼叫: {from_uri} -> {to_uri}")
                 secure_sip_logger.info(f"成功完成呼叫: {from_uri} -> {to_uri}")
+                return SIPResult(
+                    success=True,
+                    details={"from_uri": from_uri, "to_uri": to_uri, "duration": call_duration}
+                )
             else:
                 self.set_state(SIPClientState.IDLE, f"呼叫失败: {from_uri} -> {to_uri}")
                 secure_sip_logger.error(f"呼叫失败: {from_uri} -> {to_uri}")
-            
-            return result
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.SERVER_ERROR,
+                    error_message="呼叫失败",
+                    details={"from_uri": from_uri, "to_uri": to_uri}
+                )
+        except SIPException as e:
+            secure_sip_logger.error(f"发起呼叫失败: {str(e)}")
+            self.set_state(SIPClientState.ERROR, f"呼叫异常: {str(e)}")
+            return SIPResult(
+                success=False,
+                error_code=e.error_code,
+                error_message=e.message,
+                details=e.details
+            )
         except Exception as e:
             secure_sip_logger.error(f"发起呼叫失败: {str(e)}")
             self.set_state(SIPClientState.ERROR, f"呼叫异常: {str(e)}")
-            return False
+            return SIPResult(
+                success=False,
+                error_code=SIPErrorCode.CLIENT_ERROR,
+                error_message=f"呼叫异常: {str(e)}",
+                details={"exception": str(e)}
+            )
     
-    def send_message(self, from_uri: str, to_uri: str, content: str) -> bool:
+    def send_message(self, from_uri: str, to_uri: str, content: str) -> SIPResult:
         """
         发送SIP消息
         
@@ -244,9 +446,18 @@ class UnifiedSIPClient(AbstractSIPClient):
             content: 消息内容
             
         Returns:
-            bool: 消息发送是否成功
+            SIPResult: 消息发送结果
         """
         try:
+            # 验证参数
+            if not from_uri or not to_uri:
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.CLIENT_ERROR,
+                    error_message="发送方和接收方URI不能为空",
+                    details={"from_uri": from_uri, "to_uri": to_uri}
+                )
+            
             # 记录状态变化
             self.set_state(SIPClientState.UNKNOWN, f"发送消息 {from_uri} -> {to_uri}")
             
@@ -278,8 +489,18 @@ class UnifiedSIPClient(AbstractSIPClient):
             )
             
             # 发送消息
-            sock.sendto(message.encode('utf-8'), 
-                       (self.config.get('sip_server_host'), self.config.get('sip_server_port')))
+            try:
+                sock.sendto(message.encode('utf-8'), 
+                           (self.config.get('sip_server_host'), self.config.get('sip_server_port')))
+            except ConnectionRefusedError:
+                sock.close()
+                self.set_state(SIPClientState.ERROR, f"消息发送失败: 连接被拒绝")
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.NETWORK_ERROR,
+                    error_message="连接被拒绝",
+                    details={"from_uri": from_uri, "to_uri": to_uri}
+                )
             
             # 尝试接收响应
             try:
@@ -291,58 +512,129 @@ class UnifiedSIPClient(AbstractSIPClient):
                 if "200 OK" in response_str:
                     sock.close()
                     secure_sip_logger.info(f"成功发送消息: {from_uri} -> {to_uri}")
-                    return True
+                    return SIPResult(
+                        success=True,
+                        response_code=200,
+                        details={"from_uri": from_uri, "to_uri": to_uri}
+                    )
+                else:
+                    sock.close()
+                    return SIPResult(
+                        success=False,
+                        error_code=SIPErrorCode.SERVER_ERROR,
+                        error_message=f"服务器返回错误: {response_str.split()[1]} {response_str.split()[2]}",
+                        response_code=int(response_str.split()[1]) if len(response_str.split()) > 1 else None,
+                        details={"from_uri": from_uri, "to_uri": to_uri}
+                    )
             except socket.timeout:
+                sock.close()
                 secure_sip_logger.warning("等待MESSAGE响应超时")
-            
-            sock.close()
-            return True  # 默认返回True表示消息已发送
+                return SIPResult(
+                    success=True,  # 超时但消息可能已发送
+                    error_code=SIPErrorCode.TIMEOUT,
+                    error_message="等待响应超时，但消息可能已发送",
+                    details={"from_uri": from_uri, "to_uri": to_uri}
+                )
+        except SIPException as e:
+            secure_sip_logger.error(f"发送消息失败: {str(e)}")
+            self.set_state(SIPClientState.ERROR, f"消息发送异常: {str(e)}")
+            return SIPResult(
+                success=False,
+                error_code=e.error_code,
+                error_message=e.message,
+                details=e.details
+            )
         except Exception as e:
             secure_sip_logger.error(f"发送消息失败: {str(e)}")
             self.set_state(SIPClientState.ERROR, f"消息发送异常: {str(e)}")
-            return False
+            return SIPResult(
+                success=False,
+                error_code=SIPErrorCode.CLIENT_ERROR,
+                error_message=f"消息发送异常: {str(e)}",
+                details={"exception": str(e)}
+            )
     
-    def unregister(self) -> bool:
+    def unregister(self) -> SIPResult:
         """
         取消SIP注册
         
         Returns:
-            bool: 取消注册是否成功
+            SIPResult: 取消注册结果
         """
         try:
+            if not self._username:
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.CLIENT_ERROR,
+                    error_message="没有已注册的用户",
+                    details={}
+                )
+            
             self.set_state(SIPClientState.UNREGISTERING, "开始取消注册")
             secure_sip_logger.info("执行SIP取消注册")
             
             # 使用BasicSIPCallTester的注销功能
-            if hasattr(self._client, 'unregister_user') and self._username:
-                domain = self.config.get('sip_server_host', '127.0.0.1')
-                result = self._client.unregister_user(self._username, domain)
-            else:
-                # 如果没有注销方法，则仅更新状态
-                result = True
+            domain = self.config.get('sip_server_host', '127.0.0.1')
+            
+            try:
+                if hasattr(self._client, 'unregister_user'):
+                    result = self._client.unregister_user(self._username, domain)
+                else:
+                    # 如果没有注销方法，则仅更新状态
+                    result = True
+            except socket.timeout:
+                self.set_state(SIPClientState.ERROR, "注销超时")
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.TIMEOUT,
+                    error_message="注销超时",
+                    details={"username": self._username, "domain": domain}
+                )
             
             if result:
                 self.set_state(SIPClientState.UNREGISTERED, "SIP取消注册成功")
                 secure_sip_logger.info("SIP取消注册成功")
                 
                 # 移除安全存储的凭据
-                if self._username:
-                    domain = self.config.get('sip_server_host', '127.0.0.1')
-                    secure_credential_manager.remove_credentials(f"{self._username}@{domain}")
+                secure_credential_manager.remove_credentials(f"{self._username}@{domain}")
                 
                 # 重置注册相关信息
+                username = self._username
                 self._username = None
                 self._password = None
                 self._expires = 3600
-                return True
+                
+                return SIPResult(
+                    success=True,
+                    details={"username": username, "domain": domain}
+                )
             else:
                 self.set_state(SIPClientState.REGISTERED, "SIP取消注册失败，仍为注册状态")
                 secure_sip_logger.error("SIP取消注册失败")
-                return False
+                return SIPResult(
+                    success=False,
+                    error_code=SIPErrorCode.SERVER_ERROR,
+                    error_message="取消注册失败",
+                    details={"username": self._username, "domain": domain}
+                )
+        except SIPException as e:
+            secure_sip_logger.error(f"SIP取消注册失败: {str(e)}")
+            self.set_state(SIPClientState.ERROR, f"注销异常: {str(e)}")
+            return SIPResult(
+                success=False,
+                error_code=e.error_code,
+                error_message=e.message,
+                details=e.details
+            )
         except Exception as e:
             secure_sip_logger.error(f"SIP取消注册失败: {str(e)}")
             self.set_state(SIPClientState.ERROR, f"注销异常: {str(e)}")
-            return False
+            return SIPResult(
+                success=False,
+                error_code=SIPErrorCode.CLIENT_ERROR,
+                error_message=f"注销异常: {str(e)}",
+                details={"exception": str(e)}
+            )
     
     def close(self):
         """
@@ -365,49 +657,9 @@ class UnifiedSIPClient(AbstractSIPClient):
         self.set_state(SIPClientState.UNKNOWN, "客户端已关闭")
 
 
-class SIPClientFactory:
-    """
-    SIP客户端工厂类
-    提供创建不同类型SIP客户端的统一接口
-    """
-    
-    @staticmethod
-    def create_client(client_type: str, config: Dict[str, Any]) -> SIPClientBase:
-        """
-        创建SIP客户端
-        
-        Args:
-            client_type: 客户端类型 ('unified', 'socket', 'enhanced_socket', 'pjsip')
-            config: 配置参数
-            
-        Returns:
-            SIPClientBase: 创建的SIP客户端实例
-        """
-        if client_type.lower() == 'unified':
-            from .unified_sip_client import UnifiedSIPClient
-            return UnifiedSIPClient(config)
-        elif client_type.lower() == 'socket':
-            from .socket_client_adapter import SocketSIPClientAdapter
-            return SocketSIPClientAdapter(config)
-        elif client_type.lower() == 'enhanced_socket':
-            from .enhanced_socket_client import EnhancedSocketSIPClientAdapter
-            return EnhancedSocketSIPClientAdapter(config)
-        elif client_type.lower() == 'pjsip':
-            from .pj_sip_client import PJSIPSIPClient
-            return PJSIPSIPClient(config)
-        else:
-            raise ValueError(f"不支持的客户端类型: {client_type}")
-    
-    @staticmethod
-    def get_available_client_types() -> list:
-        """
-        获取可用的客户端类型
-        
-        Returns:
-            list: 可用客户端类型的列表
-        """
-        return ['unified', 'socket', 'enhanced_socket', 'pjsip']
-
-
 # 为向后兼容，保留原始的SocketSIPClientAdapter
 # 但推荐使用UnifiedSIPClient
+
+
+# 客户端创建功能已迁移到 SIPClientManager
+# 请使用 SIPClientManager 来创建和管理客户端

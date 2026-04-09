@@ -21,41 +21,51 @@ from config.config import load_config
 from port_manager import get_global_resource_manager
 
 
-def setup_logging(config_path: str = './AutoTestForUG/config/config.ini'):
+def find_config_file(config_path: str = None) -> str:
+    """查找配置文件路径
+    
+    Args:
+        config_path: 用户指定的配置文件路径
+        
+    Returns:
+        str: 找到的配置文件路径
+    """
+    # 确定项目根目录和AutoTestForUG目录的绝对路径
+    current_dir = Path.cwd()
+    autotest_dir = Path(__file__).parent.absolute()
+    project_root = autotest_dir.parent.absolute()
+    
+    # 可能的配置文件路径列表
+    possible_paths = []
+    
+    # 如果用户指定了配置文件路径，优先使用
+    if config_path:
+        possible_paths.append(Path(config_path).absolute())
+    
+    # 添加其他可能的路径
+    possible_paths.extend([
+        autotest_dir / 'config' / 'config.ini',  # AutoTestForUG/config/config.ini
+        current_dir / 'config' / 'config.ini',    # 当前目录下的config/config.ini
+        current_dir / 'AutoTestForUG' / 'config' / 'config.ini',  # 当前目录下的AutoTestForUG/config/config.ini
+        project_root / 'AutoTestForUG' / 'config' / 'config.ini'  # 项目根目录下的AutoTestForUG/config/config.ini
+    ])
+    
+    # 查找存在的配置文件
+    for path in possible_paths:
+        if path.exists() and path.is_file():
+            return str(path)
+    
+    # 如果都没找到，返回默认路径
+    return str(autotest_dir / 'config' / 'config.ini')
+
+
+def setup_logging(config_path: str = None):
     """设置日志系统"""
     try:
-        # 检查当前工作目录以确定正确的配置文件路径
-        cwd = pathlib.Path.cwd()
+        # 查找配置文件
+        actual_config_path = find_config_file(config_path)
         
-        if cwd.name == 'AutoTestForUG':
-            # 当前在AutoTestForUG目录中
-            possible_paths = [
-                './config/config.ini',  # 从AutoTestForUG目录运行
-                config_path,  # 默认路径
-            ]
-        else:
-            # 当前在项目根目录或其他位置
-            possible_paths = [
-                config_path,  # 默认路径（从项目根目录运行）
-                './config/config.ini',  # 从AutoTestForUG目录运行（如果路径错误）
-                './AutoTestForUG/config/config.ini'  # 从项目根目录运行
-            ]
-        
-        actual_config_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                actual_config_path = path
-                break
-        
-        if actual_config_path is None:
-            # 如果都没找到，尝试从当前工作目录推断
-            if cwd.name == 'AutoTestForUG':
-                # 当前在AutoTestForUG目录中
-                actual_config_path = './config/config.ini'
-            else:
-                # 当前在项目根目录或其他位置
-                actual_config_path = './AutoTestForUG/config/config.ini'
-        
+        # 加载配置
         config = load_config(actual_config_path)
         logging_config = config.get('LOGGING', {})
         log_level_str = logging_config.get('log_level', 'INFO')
@@ -65,9 +75,9 @@ def setup_logging(config_path: str = './AutoTestForUG/config/config.ini'):
         log_file = logging_config.get('log_file', './logs/autotestforug.log')
         
         # 确保日志目录存在
-        log_dir = os.path.dirname(log_file)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir)
+        log_dir = Path(log_file).parent
+        if log_dir and not log_dir.exists():
+            log_dir.mkdir(parents=True, exist_ok=True)
         
         logging.basicConfig(
             level=log_level,
@@ -77,6 +87,8 @@ def setup_logging(config_path: str = './AutoTestForUG/config/config.ini'):
                 logging.StreamHandler(sys.stdout)
             ]
         )
+        
+        logging.info(f"使用配置文件: {actual_config_path}")
     except Exception as e:
         # 如果配置文件加载失败，使用默认配置
         logging.basicConfig(
@@ -105,20 +117,8 @@ def main():
     
     args = parser.parse_args()
     
-    # 如果没有指定配置文件路径，则使用默认路径
-    if args.config is None:
-        # 检查当前工作目录以确定默认配置文件路径
-        import pathlib
-        cwd = pathlib.Path.cwd()
-        
-        # 检查可能的配置文件位置
-        if (cwd / 'AutoTestForUG' / 'config' / 'config.ini').exists():
-            args.config = './AutoTestForUG/config/config.ini'  # 从项目根目录运行
-        elif (cwd / 'config' / 'config.ini').exists():
-            args.config = './config/config.ini'  # 从AutoTestForUG目录运行
-        else:
-            # 如果都不存在，尝试使用相对路径
-            args.config = './config/config.ini'
+    # 查找配置文件路径
+    args.config = find_config_file(args.config)
     
     # 设置日志系统
     setup_logging(args.config)

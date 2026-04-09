@@ -5,12 +5,10 @@
 from .pytest_integration import *
 
 # 导入核心功能
-from .test_engine import TestEngine
 from .report_generator import ReportGenerator
 from .pytest_integration.sip_dsl import SIPDSL
 
 __all__ = [
-    'TestEngine',
     'ReportGenerator',
     'SIPDSL'
 ]

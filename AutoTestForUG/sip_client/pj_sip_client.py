@@ -58,6 +58,12 @@ class PJSIPSIPClient(SIPClientBase):
         
         self.config = config
         
+        # 重连配置
+        self.reconnect_enabled = config.get('reconnect_enabled', True)
+        self.reconnect_interval = config.get('reconnect_interval', 5)  # 重连间隔（秒）
+        self.max_reconnect_attempts = config.get('max_reconnect_attempts', 5)  # 最大重连尝试次数
+        self.reconnect_count = 0  # 当前重连尝试次数
+        
         try:
             self.ep = pj.Endpoint()
             
@@ -85,6 +91,7 @@ class PJSIPSIPClient(SIPClientBase):
             
             self.account = None
             self.current_call = None
+            self.is_connected = False
             
             logging.info("PJSIP客户端初始化成功")
             
@@ -94,6 +101,7 @@ class PJSIPSIPClient(SIPClientBase):
             self.ep = None
             self.account = None
             self.current_call = None
+            self.is_connected = False
             raise
     
     def register(self, username: str, password: str, expires: int = 3600) -> bool:
@@ -122,9 +130,16 @@ class PJSIPSIPClient(SIPClientBase):
         self.account = PJSIPAccount(self, account_config)
         try:
             self.account.create(account_config)
+            self.is_connected = True
+            self.reset_reconnect_count()  # 重置重连计数
             return True
         except Exception as e:
             logging.error(f"PJSIP注册失败: {str(e)}")
+            # 注册失败时尝试重连
+            if self.reconnect_enabled:
+                import time
+                time.sleep(self.reconnect_interval)
+                return self.reconnect()
             return False
     
     def make_call(self, from_uri: str, to_uri: str, timeout: int = 30) -> bool:
@@ -177,10 +192,67 @@ class PJSIPSIPClient(SIPClientBase):
             acc_config = pj.AccountConfig()
             acc_config.regConfig.timeoutSec = 0  # 立即取消注册
             self.account.modify(acc_config)
+            self.is_connected = False
             return True
         except Exception as e:
             logging.error(f"PJSIP取消注册失败: {str(e)}")
             return False
+    
+    def reconnect(self) -> bool:
+        """
+        重新连接到SIP服务器
+        
+        Returns:
+            bool: 重连是否成功
+        """
+        if not PJSIP_AVAILABLE:
+            return False
+        
+        if not self.reconnect_enabled:
+            logging.info("重连功能已禁用")
+            return False
+        
+        if self.reconnect_count >= self.max_reconnect_attempts:
+            logging.warning(f"已达到最大重连尝试次数 ({self.max_reconnect_attempts})")
+            return False
+        
+        self.reconnect_count += 1
+        logging.info(f"尝试重连 ({self.reconnect_count}/{self.max_reconnect_attempts})...")
+        
+        try:
+            # 先关闭现有的连接
+            if self.account:
+                try:
+                    self.account.delete()
+                except:
+                    pass
+            
+            # 重新创建账户并注册
+            username = self.config.get('username', '')
+            password = self.config.get('password', '')
+            if username and password:
+                return self.register(username, password)
+            else:
+                logging.error("重连失败: 缺少用户名或密码")
+                return False
+        except Exception as e:
+            logging.error(f"重连失败: {str(e)}")
+            return False
+    
+    def is_connection_active(self) -> bool:
+        """
+        检查连接是否活跃
+        
+        Returns:
+            bool: 连接是否活跃
+        """
+        return self.is_connected
+    
+    def reset_reconnect_count(self):
+        """
+        重置重连计数
+        """
+        self.reconnect_count = 0
     
     def close(self):
         """
@@ -195,6 +267,7 @@ class PJSIPSIPClient(SIPClientBase):
             if self.account:
                 self.account.delete()
             self.ep.libDestroy()
+            self.is_connected = False
         except Exception as e:
             logging.error(f"关闭PJSIP客户端时出错: {str(e)}")
 
@@ -214,6 +287,22 @@ if PJSIP_AVAILABLE:
             注册状态回调
             """
             logging.info(f"注册状态: {prm.code} - {prm.reason}")
+            
+            # 检查注册状态
+            if prm.code >= 200 and prm.code < 300:
+                # 注册成功
+                self.client.is_connected = True
+                self.client.reset_reconnect_count()
+                logging.info("SIP注册成功，连接已建立")
+            elif prm.code >= 400:
+                # 注册失败，尝试重连
+                self.client.is_connected = False
+                logging.warning(f"SIP注册失败: {prm.code} - {prm.reason}")
+                if self.client.reconnect_enabled:
+                    import time
+                    time.sleep(self.client.reconnect_interval)
+                    logging.info("尝试自动重连...")
+                    self.client.reconnect()
         
         def onIncomingCall(self, prm):
             """

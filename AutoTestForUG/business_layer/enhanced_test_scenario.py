@@ -84,36 +84,6 @@ class EnhancedTestScenario:
         # 客户端选择策略
         self.client_strategy: Optional[ClientSelectionStrategy] = None
         self.client: Optional[SIPClientBase] = None
-
-
-class EnhancedTestScenario:
-    """
-    增强的测试场景管理器
-    支持复杂业务场景定义和客户端自动选择
-    """
-    
-    def __init__(self, name: str, description: str = "", requirement: TestRequirement = None):
-        """
-        初始化测试场景
-        
-        Args:
-            name: 场景名称
-            description: 场景描述
-            requirement: 测试需求类型，用于客户端选择
-        """
-        self.name = name
-        self.description = description
-        self.requirement = requirement or TestRequirement.BASIC_SIP_PROTOCOL
-        self.steps: List[Dict[str, Any]] = []
-        self.status = ScenarioStatus.PENDING
-        self.results: List[Dict[str, Any]] = []
-        self.start_time: Optional[datetime] = None
-        self.end_time: Optional[datetime] = None
-        self.logger = logging.getLogger(__name__)
-        
-        # 客户端选择策略
-        self.client_strategy: Optional[ClientSelectionStrategy] = None
-        self.client: Optional[SIPClientBase] = None
     
     def set_client_strategy(self, strategy: ClientSelectionStrategy):
         """
